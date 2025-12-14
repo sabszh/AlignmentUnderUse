@@ -1,13 +1,13 @@
 """
 Fetch ChatGPT conversation data from share links using the backend API.
 
-Reads Reddit posts from JSONL (output of collect_reddit_posts.py),
-extracts share URLs, fetches conversations from ChatGPT backend API,
-and writes structured conversation data to JSONL.
+Reads Reddit posts and comments from JSONL files, extracts share URLs,
+fetches conversations from ChatGPT backend API, and writes structured
+conversation data to JSONL.
 
 Usage:
     python -m data_collection.collect_conversations
-    python -m data_collection.collect_conversations --input data/reddit_posts.jsonl
+    python -m data_collection.collect_conversations --input data/reddit_posts.jsonl data/reddit_comments.jsonl
     python -m data_collection.collect_conversations --limit 10 --resume
 """
 
@@ -85,17 +85,18 @@ def extract_share_id(url: str) -> Optional[str]:
 def load_targets(inputs: List[Path]) -> Dict[str, Dict]:
     """Load share URLs and Reddit metadata from JSONL files.
     
+    Handles both reddit posts and comments with different field structures.
     Deduplicates at two levels:
-    1. Share IDs - same share URL from multiple posts gets one entry
-    2. Reddit posts - same Reddit post ID won't be added twice to a share
+    1. Share IDs - same share URL from multiple sources gets one entry
+    2. Reddit sources - same Reddit post/comment ID won't be added twice to a share
     
     Args:
-        inputs: List of JSONL file paths containing Reddit posts with share URLs.
+        inputs: List of JSONL file paths containing Reddit posts/comments with share URLs.
     
     Returns:
-        Dict mapping share_id to {"url": str, "reddit_posts": List[Dict]}.
-        Each reddit_post Dict contains: id, subreddit, author, created_utc,
-        title, score, num_comments, permalink.
+        Dict mapping share_id to {"url": str, "reddit_sources": List[Dict]}.
+        Each source Dict contains: type (post/comment), id, subreddit, author,
+        created_utc, score, permalink, and type-specific fields (title, body, etc.).
     """
     targets: Dict[str, Dict] = {}
     
@@ -110,8 +111,16 @@ def load_targets(inputs: List[Path]) -> Dict[str, Dict]:
                 except json.JSONDecodeError:
                     continue
                 
-                # Handle both formats: urls array or single url
-                urls = obj.get("urls") or ([obj.get("url")] if obj.get("url") else [])
+                # Detect if this is a comment or post
+                is_comment = "share_urls" in obj or "parent_id" in obj or "link_id" in obj
+                
+                # Extract URLs based on source type
+                if is_comment:
+                    # Comments have share_urls array
+                    urls = obj.get("share_urls", [])
+                else:
+                    # Posts have single url or urls array
+                    urls = obj.get("urls") or ([obj.get("url")] if obj.get("url") else [])
                 
                 for url in urls:
                     share_id = extract_share_id(url)
@@ -120,25 +129,43 @@ def load_targets(inputs: List[Path]) -> Dict[str, Dict]:
                     
                     # Deduplicate by share_id - first URL wins
                     entry = targets.setdefault(
-                        share_id, {"url": url, "reddit_posts": []}
+                        share_id, {"url": url, "reddit_sources": []}
                     )
                     
-                    # Store Reddit metadata
-                    reddit_post = {
-                        "id": obj.get("id"),
-                        "subreddit": obj.get("subreddit"),
-                        "author": obj.get("author"),
-                        "created_utc": obj.get("created_utc"),
-                        "title": obj.get("title"),
-                        "score": obj.get("score"),
-                        "num_comments": obj.get("num_comments"),
-                        "permalink": obj.get("permalink"),
-                    }
+                    # Build metadata based on source type
+                    if is_comment:
+                        reddit_source = {
+                            "type": "comment",
+                            "id": obj.get("id"),
+                            "name": obj.get("name"),
+                            "subreddit": obj.get("subreddit"),
+                            "author": obj.get("author"),
+                            "created_utc": obj.get("created_utc"),
+                            "body": obj.get("body"),
+                            "score": obj.get("score"),
+                            "link_id": obj.get("link_id"),
+                            "parent_id": obj.get("parent_id"),
+                            "source_post_id": obj.get("source_post_id"),
+                            "permalink": obj.get("permalink"),
+                        }
+                    else:
+                        reddit_source = {
+                            "type": "post",
+                            "id": obj.get("id"),
+                            "name": obj.get("name"),
+                            "subreddit": obj.get("subreddit"),
+                            "author": obj.get("author"),
+                            "created_utc": obj.get("created_utc"),
+                            "title": obj.get("title"),
+                            "score": obj.get("score"),
+                            "num_comments": obj.get("num_comments"),
+                            "permalink": obj.get("permalink"),
+                        }
                     
-                    # Deduplicate Reddit posts by post ID
-                    post_ids = {p["id"] for p in entry["reddit_posts"] if p.get("id")}
-                    if reddit_post["id"] and reddit_post["id"] not in post_ids:
-                        entry["reddit_posts"].append(reddit_post)
+                    # Deduplicate by source ID (post or comment ID)
+                    source_ids = {s["id"] for s in entry["reddit_sources"] if s.get("id")}
+                    if reddit_source["id"] and reddit_source["id"] not in source_ids:
+                        entry["reddit_sources"].append(reddit_source)
     
     return targets
 
@@ -410,12 +437,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--input",
         nargs="+",
-        default=["data/reddit_posts.jsonl"],
-        help="JSONL files with Reddit posts (default: data/reddit_posts.jsonl)",
+        default=["../data/reddit_posts.jsonl", "..data/reddit_comments.jsonl"],
+        help="JSONL files with Reddit posts/comments (default: data/reddit_posts.jsonl data/reddit_comments.jsonl)",
     )
     parser.add_argument(
         "--output",
-        default="data/conversations.jsonl",
+        default="../data/conversations.jsonl",
         help="Output JSONL file (default: data/conversations.jsonl)",
     )
     parser.add_argument(
@@ -499,7 +526,7 @@ def main() -> None:
             
             target = targets[share_id]
             url = target["url"]
-            reddit_posts = target["reddit_posts"]
+            reddit_sources = target["reddit_sources"]
             
             # Fetch from API
             error, result = fetch_share(share_id, timeout=args.timeout)
@@ -645,7 +672,7 @@ def main() -> None:
                 "fetch_success": messages is not None,
                 "status_code": status_code,
                 "error": error or result.get("error"),
-                "reddit_sources": reddit_posts,
+                "reddit_sources": reddit_sources,
                 "conversation_metadata": conv_metadata,
                 "conversation_summary": conversation_summary,
                 "messages": messages,

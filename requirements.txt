@@ -1,3 +1,9 @@
 requests
 tqdm
 curl-cffi
+pandas
+ftfy
+regex
+langid
+presidio-analyzer
+presidio-anonymizer
