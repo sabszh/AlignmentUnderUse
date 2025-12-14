@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--output-dir",
-        default="data",
+        default="../data",
         help="Output directory relative to data_collection (default: data)",
     )
 

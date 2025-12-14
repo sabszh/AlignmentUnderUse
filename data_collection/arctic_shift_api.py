@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 
 API_URL = "https://arctic-shift.photon-reddit.com/api/posts/search"
+COMMENTS_API_URL = "https://arctic-shift.photon-reddit.com/api/comments/search"
 
 
 def fetch_chatgpt_share_posts(
@@ -38,6 +39,35 @@ def fetch_chatgpt_share_posts(
     return payload.get("data", [])
 
 
+def fetch_chatgpt_share_comments(
+    limit: str = "auto",
+    before: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """Fetch Reddit comments with ChatGPT share URLs from Arctic Shift API.
+    
+    Args:
+        limit: Number of comments to fetch. "auto" for max allowed (typically 1000).
+        before: Unix timestamp - only fetch comments created before this time.
+                Use for pagination by passing the created_utc of the last comment.
+    
+    Returns:
+        List of raw comment objects from Arctic Shift, ordered newest to oldest.
+    """
+    params = {
+        "body": "https://chatgpt.com/share/",
+        "limit": limit
+    }
+    
+    if before is not None:
+        params["before"] = before
+
+    resp = requests.get(COMMENTS_API_URL, params=params)
+    resp.raise_for_status()
+    payload = resp.json()
+
+    return payload.get("data", [])
+
+
 def normalize_post(item: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize an Arctic Shift post to analysis-friendly format.
     
@@ -57,6 +87,30 @@ def normalize_post(item: Dict[str, Any]) -> Dict[str, Any]:
         "score": item.get("score"),
         "num_comments": item.get("num_comments"),
         "url": item.get("url"),
+        "permalink": f"https://reddit.com{item.get('permalink')}"
+                      if item.get("permalink") else None
+    }
+
+
+def normalize_comment(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize an Arctic Shift comment to analysis-friendly format.
+    
+    Args:
+        item: Raw comment object from Arctic Shift.
+    
+    Returns:
+        Normalized comment dictionary with standardized fields.
+    """
+    return {
+        "id": item.get("id"),
+        "name": item.get("name"),
+        "subreddit": item.get("subreddit"),
+        "author": item.get("author"),
+        "created_utc": item.get("created_utc"),
+        "body": item.get("body"),
+        "score": item.get("score"),
+        "link_id": item.get("link_id"),  # Parent post ID
+        "parent_id": item.get("parent_id"),  # Direct parent (comment or post)
         "permalink": f"https://reddit.com{item.get('permalink')}"
                       if item.get("permalink") else None
     }
