@@ -209,16 +209,22 @@ def already_done(output_path: Path, refresh_missing: bool) -> Set[str]:
 
 
 def extract_messages(api_response: Dict) -> Optional[List[Dict]]:
-    """Extract and order messages from ChatGPT API response.
+    """Extract and order messages from ChatGPT API response with full metadata preservation.
     
-    Parses the 'mapping' object from backend API, extracts message content
-    and extensive metadata for research purposes.
+    DESIGN PRINCIPLE: Lossless first, interpretation later.
+    
+    Preserves ALL metadata from backend API without filtering or guessing importance.
+    Adds convenience fields for common queries but keeps full raw structures.
     
     Args:
         api_response: JSON response from /backend-api/share/{id} endpoint.
     
     Returns:
-        List of message dicts with comprehensive metadata.
+        List of message dicts with:
+        - Full raw metadata (raw_metadata, raw_content, author_metadata)
+        - Convenience fields (model_slug, citations, etc.)
+        - Interaction flags (is_visually_hidden, is_redacted, etc.)
+        
         Sorted by create_time (oldest first).
         Returns None if parsing fails.
     """
@@ -238,9 +244,15 @@ def extract_messages(api_response: Dict) -> Optional[List[Dict]]:
         if not isinstance(message, dict):
             continue
         
-        # Extract content
+        # Extract raw structures (PRESERVE EVERYTHING)
         content = message.get("content") or {}
+        metadata = message.get("metadata") or {}
+        author = message.get("author") or {}
+        
+        # Extract convenience fields for common queries
         content_type = content.get("content_type")
+        role = author.get("role")
+        author_name = author.get("name")
         
         # Text content from parts
         parts = content.get("parts")
@@ -255,33 +267,46 @@ def extract_messages(api_response: Dict) -> Optional[List[Dict]]:
         # Reasoning/thoughts content (o1/o3 models)
         thoughts = content.get("thoughts")
         
-        # Author info
-        author = message.get("author") or {}
-        role = author.get("role")
-        author_name = author.get("name")  # For tool messages
-        
-        # Metadata extraction
-        metadata = message.get("metadata") or {}
-        
-        # Build message object
+        # Build message object with full preservation
         msg = {
+            # Raw data (LOSSLESS - keep everything as-is)
+            "raw_metadata": metadata,
+            "raw_content": content,
+            "author_metadata": author.get("metadata"),
+            
+            # Core identifiers
             "id": message.get("id"),
             "node_id": node_id,
             "parent": node.get("parent"),
             "children": node.get("children"),
+            
+            # Author info
             "role": role,
             "author_name": author_name,
+            
+            # Timestamps
             "create_time": message.get("create_time"),
             "update_time": message.get("update_time"),
+            
+            # Content
             "content_type": content_type,
             "text": text,
+            
+            # Message properties
             "status": message.get("status"),
             "weight": message.get("weight"),
-            "end_turn": message.get("end_turn"),
-            "recipient": message.get("recipient"),
-            "channel": message.get("channel"),
+            
+            # Interaction flags (explicit visibility + turn semantics)
+            "interaction_flags": {
+                "is_visually_hidden": metadata.get("is_visually_hidden_from_conversation", False),
+                "is_redacted": metadata.get("is_redacted", False),
+                "end_turn": message.get("end_turn"),
+                "recipient": message.get("recipient"),
+                "channel": message.get("channel"),
+            },
         }
         
+        # Convenience fields (derived views - NOT replacements for raw data)
         # Add code/language if present
         if code:
             msg["code"] = code
@@ -292,11 +317,19 @@ def extract_messages(api_response: Dict) -> Optional[List[Dict]]:
         if thoughts:
             msg["thoughts"] = thoughts
         
-        # Extract valuable metadata fields
+        # Extract commonly used metadata fields (convenience accessors)
         if metadata.get("model_slug"):
             msg["model_slug"] = metadata["model_slug"]
         if metadata.get("gizmo_id"):
             msg["gizmo_id"] = metadata["gizmo_id"]
+        if metadata.get("turn_exchange_id"):
+            msg["turn_exchange_id"] = metadata["turn_exchange_id"]
+        if metadata.get("shared_conversation_id"):
+            msg["shared_conversation_id"] = metadata["shared_conversation_id"]
+        if metadata.get("message_type"):
+            msg["message_type"] = metadata["message_type"]
+        if metadata.get("parent_id"):
+            msg["parent_id"] = metadata["parent_id"]
         if metadata.get("citations"):
             msg["citations"] = metadata["citations"]
         if metadata.get("content_references"):
@@ -316,10 +349,21 @@ def extract_messages(api_response: Dict) -> Optional[List[Dict]]:
             msg["execution_status"] = result.get("status")
             msg["execution_output"] = result.get("final_expression_output")
         
+        # Latency tracking (optional convenience field)
+        if metadata.get("sonic_classification_result"):
+            sonic = metadata["sonic_classification_result"]
+            if sonic.get("latency_ms") is not None:
+                msg["latency_ms"] = sonic["latency_ms"]
+        
         messages.append(msg)
     
     # Sort by creation time
     messages.sort(key=lambda m: m.get("create_time") or 0)
+    
+    # Add backend ordering index after sort
+    for backend_index, msg in enumerate(messages):
+        msg["backend_index"] = backend_index
+    
     return messages
 
 
@@ -545,17 +589,57 @@ def main() -> None:
                 conv_metadata["is_archived"] = api_response.get("is_archived")
                 conv_metadata["current_node"] = api_response.get("current_node")
                 
-                # Model information
+                # Shared conversation ID (cross-references messages)
+                if api_response.get("shared_conversation_id"):
+                    conv_metadata["shared_conversation_id"] = api_response["shared_conversation_id"]
+                
+                # Model information (full object, not just slug)
                 model_info = api_response.get("model") or {}
-                if model_info.get("slug"):
-                    conv_metadata["model"] = model_info["slug"]
+                if model_info:
+                    conv_metadata["model"] = model_info
                 
                 # Memory scope (if used)
                 if api_response.get("memory_scope"):
                     conv_metadata["memory_scope"] = api_response["memory_scope"]
                 
+                # Moderation state and results
+                if api_response.get("moderation_state"):
+                    conv_metadata["moderation_state"] = api_response["moderation_state"]
+                if api_response.get("moderation_results"):
+                    conv_metadata["moderation_results"] = api_response["moderation_results"]
+                
+                # URL access controls
+                if api_response.get("safe_urls"):
+                    conv_metadata["safe_urls"] = api_response["safe_urls"]
+                if api_response.get("blocked_urls"):
+                    conv_metadata["blocked_urls"] = api_response["blocked_urls"]
+                
+                # Tool and feature flags
+                if api_response.get("disabled_tool_ids"):
+                    conv_metadata["disabled_tool_ids"] = api_response["disabled_tool_ids"]
+                if api_response.get("default_model_slug"):
+                    conv_metadata["default_model_slug"] = api_response["default_model_slug"]
+                
+                # Continuation and context editing
+                if api_response.get("continue_conversation_url"):
+                    conv_metadata["continue_conversation_url"] = api_response["continue_conversation_url"]
+                if api_response.get("has_user_editable_context") is not None:
+                    conv_metadata["has_user_editable_context"] = api_response["has_user_editable_context"]
+                
+                # Additional boolean flags
+                if api_response.get("is_indexable") is not None:
+                    conv_metadata["is_indexable"] = api_response["is_indexable"]
+                if api_response.get("is_better_metatags_enabled") is not None:
+                    conv_metadata["is_better_metatags_enabled"] = api_response["is_better_metatags_enabled"]
+                if api_response.get("sugar_item_visible") is not None:
+                    conv_metadata["sugar_item_visible"] = api_response["sugar_item_visible"]
+                if api_response.get("is_study_mode") is not None:
+                    conv_metadata["is_study_mode"] = api_response["is_study_mode"]
+                
                 # Analyze conversation features
                 mapping = api_response.get("mapping") or {}
+                conv_metadata["mapping_size"] = len(mapping)
+                conv_metadata["root_node"] = api_response.get("current_node")
                 
                 # Custom instructions flag (redacted but detectable)
                 has_custom_instructions = any(
@@ -656,6 +740,20 @@ def main() -> None:
             
             # Compute summary
             conversation_summary = compute_conversation_summary(messages)
+            
+            # Add visibility summary to metadata
+            if messages:
+                conv_metadata["visibility_summary"] = {
+                    "total_messages": len(messages),
+                    "hidden_messages": sum(
+                        1 for m in messages
+                        if m.get("interaction_flags", {}).get("is_visually_hidden")
+                    ),
+                    "redacted_messages": sum(
+                        1 for m in messages
+                        if m.get("interaction_flags", {}).get("is_redacted")
+                    ),
+                }
             
             # Timestamps
             fetched_at = int(time.time())

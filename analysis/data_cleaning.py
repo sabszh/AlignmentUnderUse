@@ -13,7 +13,11 @@ Processing steps:
 1. Loads conversations from JSONL
 2. Filters to successful fetches only
 3. Cleans markdown formatting (MINIMAL - preserves structural signals)
-4. Derives structural features (turns, lengths, roles)
+   - Normalizes code blocks to typed placeholders:
+     * [CODE_BLOCK_EXECUTABLE] - executable code
+     * [FORMAL_SPEC_BLOCK] - formal specifications, schemas
+     * [DATA_DUMP_BLOCK] - data dumps, logs
+4. Derives structural features (turns, lengths, roles, block counts)
 5. Detects language with confidence metadata
 6. Filters to English-only conversations
 7. Saves cleaned dataset ready for analysis
@@ -34,6 +38,63 @@ from pathlib import Path
 import ftfy
 import langid
 import pandas as pd
+
+
+def classify_block(block_text):
+    """Classify a code block by content heuristics.
+    
+    Returns one of:
+    - [CODE_BLOCK_EXECUTABLE] - contains executable code patterns
+    - [FORMAL_SPEC_BLOCK] - contains formal specifications, schemas, diagrams
+    - [DATA_DUMP_BLOCK] - data, logs, or other dumps
+    
+    Args:
+        block_text: The text content of the code block
+        
+    Returns:
+        str: Placeholder token for this block type
+    """
+    if not block_text:
+        return '[DATA_DUMP_BLOCK]'
+    
+    # Normalize to lowercase for matching
+    lower_text = block_text.lower()
+    
+    # Formal specification keywords (higher priority)
+    formal_keywords = [
+        'model', 'schema', 'uml', 'diagram', 'binding', 
+        'acceptance criteria', 'entity', 'pipeline',
+        'specification', 'constraint', 'invariant',
+        'precondition', 'postcondition', 'ontology',
+        'taxonomy', 'relationship', 'attribute',
+    ]
+    
+    if any(keyword in lower_text for keyword in formal_keywords):
+        return '[FORMAL_SPEC_BLOCK]'
+    
+    # Executable code keywords (programming languages)
+    code_keywords = [
+        'def ', 'class ', 'import ', 'from ', 'function',
+        'const ', 'let ', 'var ', 'return',
+        'select ', 'from ', 'where ', 'insert ',
+        'public ', 'private ', 'void ', 'int ',
+        'if (', 'for (', 'while (', 'switch (',
+    ]
+    
+    # Structural code patterns
+    code_patterns = ['{', '}', ';', '()', '=>', '->', '::',]
+    
+    # Check for code keywords
+    if any(keyword in lower_text for keyword in code_keywords):
+        return '[CODE_BLOCK_EXECUTABLE]'
+    
+    # Check for multiple code structural patterns
+    pattern_count = sum(1 for pattern in code_patterns if pattern in block_text)
+    if pattern_count >= 2:
+        return '[CODE_BLOCK_EXECUTABLE]'
+    
+    # Default: treat as data dump
+    return '[DATA_DUMP_BLOCK]'
 
 
 def clean_markdown(text):
@@ -57,8 +118,11 @@ def clean_markdown(text):
     - Excessive punctuation patterns
     - Extra whitespace
     
-    PRESERVES (replaces with placeholders):
-    - Code blocks (```...```) → [CODE_BLOCK_REMOVED] - signals technical intent/competence
+    PRESERVES (normalizes with typed placeholders):
+    - Code blocks (```...```) → Typed placeholders based on content:
+      - [CODE_BLOCK_EXECUTABLE] - executable code (def, class, SELECT, etc.)
+      - [FORMAL_SPEC_BLOCK] - formal specifications, schemas, UML diagrams
+      - [DATA_DUMP_BLOCK] - data dumps, logs, other structured content
     
     Args:
         text: Input text with markdown formatting
@@ -69,9 +133,16 @@ def clean_markdown(text):
     if not isinstance(text, str) or not text:
         return text
     
-    # PRESERVE code blocks with placeholder (signals technical intent)
-    # Replace fenced code blocks with marker instead of deleting
-    text = regex.sub(r'```[\s\S]*?```', ' [CODE_BLOCK_REMOVED] ', text)
+    # NORMALIZE code blocks with typed placeholders (preserves structure)
+    # Replace each fenced code block with a classifier-determined marker
+    def replace_code_block(match):
+        block_content = match.group(0)
+        # Extract content between fences (remove ```language and closing ```)
+        content = regex.sub(r'^```[a-zA-Z0-9]*\n?', '', block_content)
+        content = regex.sub(r'\n?```$', '', content)
+        return ' ' + classify_block(content) + ' '
+    
+    text = regex.sub(r'```[\s\S]*?```', replace_code_block, text)
     
     # Remove inline code (`code`) - extract content
     text = regex.sub(r'`([^`]+)`', r'\1', text)
@@ -207,13 +278,13 @@ def detect_conversation_language(messages):
 
 
 def derive_structural_features(messages):
-    """Derive privacy-safe structural features before anonymization.
+    """Derive privacy-safe structural features from cleaned messages.
     
-    These features should be computed BEFORE anonymization since anonymization
-    may alter text lengths and other properties.
+    These features should be computed AFTER markdown cleaning to accurately
+    count normalized block types. Text lengths are computed from cleaned text.
     
     Args:
-        messages: List of message dictionaries
+        messages: List of message dictionaries (after markdown cleaning)
         
     Returns:
         dict: Structural features for the conversation
@@ -229,6 +300,10 @@ def derive_structural_features(messages):
             'total_conversation_length': 0,
             'user_text_length': 0,
             'assistant_text_length': 0,
+            'num_code_blocks': 0,
+            'num_formal_blocks': 0,
+            'num_data_blocks': 0,
+            'has_any_block': False,
         }
     
     user_lengths = []
@@ -236,11 +311,22 @@ def derive_structural_features(messages):
     system_count = 0
     total_length = 0
     
+    # Count block types across all messages
+    num_code_blocks = 0
+    num_formal_blocks = 0
+    num_data_blocks = 0
+    
     for msg in messages:
         role = msg.get('role', '')
         text = msg.get('text', '')
         text_len = len(text) if text else 0
         total_length += text_len
+        
+        # Count block types from cleaned text
+        if text:
+            num_code_blocks += text.count('[CODE_BLOCK_EXECUTABLE]')
+            num_formal_blocks += text.count('[FORMAL_SPEC_BLOCK]')
+            num_data_blocks += text.count('[DATA_DUMP_BLOCK]')
         
         if role == 'user':
             user_lengths.append(text_len)
@@ -248,6 +334,8 @@ def derive_structural_features(messages):
             assistant_lengths.append(text_len)
         elif role == 'system':
             system_count += 1
+    
+    total_blocks = num_code_blocks + num_formal_blocks + num_data_blocks
     
     return {
         'total_turns': len(messages),
@@ -259,6 +347,10 @@ def derive_structural_features(messages):
         'total_conversation_length': total_length,
         'user_text_length': sum(user_lengths),
         'assistant_text_length': sum(assistant_lengths),
+        'num_code_blocks': num_code_blocks,
+        'num_formal_blocks': num_formal_blocks,
+        'num_data_blocks': num_data_blocks,
+        'has_any_block': total_blocks > 0,
     }
 
 
@@ -332,7 +424,8 @@ def main():
     else:
         print("\nCleaning markdown formatting from messages...")
         print("(Removing headers, bold, links, tables, etc.)")
-        print("(Preserving: code blocks → [CODE_BLOCK_REMOVED], snake_case identifiers)")
+        print("(Normalizing: code blocks → [CODE_BLOCK_EXECUTABLE], [FORMAL_SPEC_BLOCK], [DATA_DUMP_BLOCK])")
+        print("(Preserving: snake_case identifiers, emojis)")
         
         df_clean['messages'] = df_clean['messages'].apply(
             lambda msgs: clean_message_text(msgs, skip_cleaning=False)

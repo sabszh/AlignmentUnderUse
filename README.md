@@ -466,7 +466,7 @@ AlignmentUnderUse/
 
 ### Analysis Pipeline
 
-**All analysis is performed on raw, unanonymized data.** The data cleaning pipeline (`data_cleaning.py`) performs text normalization and language filtering but does not remove or obscure any identifying information. This preserves the full semantic and structural content needed for discourse and alignment analysis.
+**All analysis is performed on raw data.** The data cleaning pipeline (`data_cleaning.py`) performs text normalization and language filtering but does not remove or obscure any identifying information. This preserves the full semantic and structural content needed for discourse and alignment analysis.
 
 ### Data Release Policy
 
