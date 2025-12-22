@@ -11,6 +11,16 @@ ftfy==6.3.1
 regex==2025.11.3
 langid==1.1.6
 
+# Analysis/visualization tooling used in the notebook
+sentence-transformers==2.7.0
+torch==2.2.2
+transformers==4.44.2
+seaborn==0.13.2
+matplotlib==3.8.4
+scikit-learn==1.4.2
+turftopic==0.2.6
+align==0.4.2
+
 # Optional: PII anonymization (not used in analysis pipeline)
 presidio_analyzer==2.2.360
 presidio_anonymizer==2.2.360

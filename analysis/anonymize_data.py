@@ -7,13 +7,7 @@ Uses Microsoft Presidio to anonymize only high-risk personally identifiable info
 - Phone numbers (PHONE_NUMBER)
 - Precise street addresses (PRECISE_ADDRESS)
 
-Preserves semantic content for analysis:
-- Organizations, products, laws, events
-- General locations (cities, countries)
-- Dates and times
-- Numbers, URLs, and other non-identifying content
-
-This is a post-processing step for ethical data sharing, NOT an analytical transformation.
+This is a post-processing step for ethical data sharing.
 
 Usage:
     python -m analysis.anonymize_data

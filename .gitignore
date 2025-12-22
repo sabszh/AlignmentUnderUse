@@ -26,6 +26,9 @@ venv.bak/
 # Data collection outputs (large JSONL files)
 data/bin
 data/*.jsonl
+data/*npy
+data/*zip
+data/*csv
 
 # Analysis outputs and notebooks
 analysis/data/*.jsonl
