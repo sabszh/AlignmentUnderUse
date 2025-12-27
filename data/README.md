@@ -15,13 +15,34 @@ For information on how to collect the dataset yourself, please refer to the [mai
 - ChatGPT backend API access for conversation retrieval
 - Technical requirements and dependencies
 
-## Expected Data Files
+## Folder Structure
 
-After running the collection pipeline, this directory should contain:
-- `conversations.jsonl` - Raw collected conversations with metadata
-- `conversations_english.jsonl` - English-only filtered conversations
-- `reddit_posts.jsonl` - Reddit posts containing ChatGPT share links
-- `reddit_comments.jsonl` - Reddit comments with share links
-- `sample.jsonl` - Sample data for testing
+After running the collection and analysis pipeline, this directory is organized as:
+
+```
+data/
+├── raw/                          # Source dumps from APIs
+│   ├── reddit_posts.jsonl
+│   ├── reddit_comments.jsonl
+│   └── conversations.jsonl
+├── processed/                    # Cleaned, curated datasets
+│   ├── conversations_english.jsonl
+│   ├── anonymized_conversations.jsonl
+│   └── df_pairs.csv
+├── derived/                      # Computed arrays and features
+│   ├── assistant_embeddings.npy
+│   ├── user_embeddings.npy
+│   ├── semantic_similarity.npy
+│   ├── message_sentiment.npy
+│   └── lsm_scores.csv
+├── outputs/
+│   └── topics/                   # Topic modeling outputs
+│       ├── conversations_with_topics.csv
+│       ├── combined_measures.csv
+│       └── topic_distributions.png
+└── README.md
+```
+
+**Only `README.md` is tracked in Git.** All other files are ignored via `.gitignore`.
 
 See the main README for full documentation on the data schema and collection process.

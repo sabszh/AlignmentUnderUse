@@ -341,9 +341,22 @@ python -m analysis.topic_modeling --input ../data/processed/conversations_englis
 
 Outputs are saved to `data/outputs/topics/`.
 
+## Linguistic Style Matching (LSM)
+
+Compute linguistic style matching scores between sequential user-assistant message pairs:
+
+```bash
+python -m analysis.lsm_scoring
+python -m analysis.lsm_scoring --input ../data/processed/conversations_english.jsonl --output ../data/outputs/lsm_scores.csv
+```
+
+LSM measures linguistic alignment across functional word categories: articles, prepositions, pronouns, auxiliary verbs, conjunctions, negations, and common adverbs. No filtering is applied; all conversations are processed.
+
+Output is saved to `data/outputs/lsm_scores.csv` with columns: `conv_id`, `turn`, `lsm_score`.
+
 ## Combined Analysis
 
-Use `analysis/combined_analysis.ipynb` to merge topic assignments with sentiment aggregates and produce plots. It writes `combined_measures.csv` under `data/outputs/topics/`.
+Use `analysis/combined_analysis.ipynb` to merge topic assignments with sentiment aggregates and LSM scores to produce plots. It writes `combined_measures.csv` under `data/outputs/topics/`.
 
 **Note:** The `share_urls` field contains all ChatGPT share URLs extracted from the comment body. The pattern matches various URL formats:
 - `https://chatgpt.com/share/...`
