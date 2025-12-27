@@ -5,22 +5,36 @@ curl_cffi==0.13.0
 
 # Data processing dependencies
 pandas==2.3.3
+numpy==2.3.5
 
-# Analysis dependencies
+# Text processing and analysis
 ftfy==6.3.1
 regex==2025.11.3
 langid==1.1.6
+beautifulsoup4==4.14.2
+lxml==6.0.2
+nltk==3.9.2
+spacy==3.8.11
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl#sha256=1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85
+en_core_web_lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl#sha256=293e9547a655b25499198ab15a525b05b9407a75f10255e405e8c3854329ab63
 
-# Analysis/visualization tooling used in the notebook
-sentence-transformers==2.7.0
-torch==2.2.2
-transformers==4.44.2
+# NLP and embeddings
+sentence-transformers==5.2.0
+transformers==4.57.3
+torch==2.9.1
+
+# Scientific computing and visualization
+scipy==1.16.3
+scikit-learn==1.8.0
+matplotlib==3.10.7
 seaborn==0.13.2
-matplotlib==3.8.4
-scikit-learn==1.4.2
-turftopic==0.2.6
-align==0.4.2
 
-# Optional: PII anonymization (not used in analysis pipeline)
+# Topic modeling
+turftopic==0.23.1
+
+# PII anonymization (optional)
 presidio_analyzer==2.2.360
 presidio_anonymizer==2.2.360
+
+# Environment and utilities
+python-dotenv==1.2.1
