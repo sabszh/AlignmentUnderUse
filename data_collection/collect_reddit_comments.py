@@ -40,14 +40,14 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--posts-file",
-        default="../data/reddit_posts.jsonl",
-        help="Input JSONL file with Reddit posts (default: data/reddit_posts.jsonl)",
+        default="../data/raw/reddit_posts.jsonl",
+        help="Input JSONL file with Reddit posts (default: data/raw/reddit_posts.jsonl)",
     )
 
     parser.add_argument(
         "--output-dir",
-        default="../data",
-        help="Output directory relative to data_collection (default: data)",
+        default="../data/raw",
+        help="Output directory relative to data_collection (default: data/raw)",
     )
 
     parser.add_argument(

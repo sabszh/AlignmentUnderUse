@@ -4,15 +4,18 @@ Research project investigating how ChatGPT is used in practice through shared co
 
 ## Overview
 
-This project collects and analyzes publicly shared ChatGPT conversations from Reddit to understand real-world usage patterns, interaction styles, and alignment in practice. The data collection pipeline leverages two key data sources:
+This project collects and analyzes publicly shared ChatGPT conversations from Reddit to understand real-world usage patterns, interaction styles, and alignment in practice. 
 
+**Data Collection:** The pipeline leverages two key data sources:
 1. **Arctic Shift API** - Historical Reddit archive providing full-text search across Reddit posts and comments
 2. **ChatGPT Backend API** - OpenAI's share endpoint exposing rich conversation metadata
 
-The pipeline has three stages:
-1. **Reddit post collection** - Find Reddit posts containing ChatGPT share links using Arctic Shift
-2. **Reddit comments collection** - Extract ChatGPT share links from comments on posts found in stage 1
-3. **Conversation collection** - Fetch full conversation data with comprehensive metadata from ChatGPT backend API
+Collection occurs in three stages: Reddit post discovery, comment extraction, and conversation fetching with comprehensive metadata.
+
+**Alignment Analysis:** The project computes semantic and sentiment alignment in human-AI conversations:
+- **Semantic Alignment** - Measures meaning similarity between user and assistant messages using sentence embeddings (cosine similarity)
+- **Sentiment Alignment** - Measures emotional tone alignment using sentiment analysis (polarity difference)
+- **Visualization** - Generates plots analyzing alignment patterns across conversation dynamics, model versions, and message characteristics
 
 ## Data Sources & APIs
 
@@ -48,19 +51,26 @@ OpenAI's backend API exposes rich metadata for shared conversations.
 
 ### Dependencies
 
-Core libraries:
+Data collection:
 - `curl-cffi` - Cloudflare bypass (critical for ChatGPT API)
 - `requests` - Arctic Shift API client
 - `tqdm` - Progress bars
 - `pandas` - Data processing
 
-Analysis libraries:
+Data cleaning:
 - `ftfy` - Text encoding fixes
 - `regex` - Enhanced pattern matching
 - `langid` - Language detection
 
-Optional utility:
-- `presidio-analyzer`, `presidio-anonymizer` - PII detection (for anonymization utility only)
+Alignment analysis:
+- `sentence-transformers` - Semantic embeddings (all-mpnet-base-v2)
+- `transformers` - Sentiment analysis (distilbert-sst-2)
+- `torch` - PyTorch backend for models
+- `numpy` - Array operations and caching
+- `matplotlib`, `seaborn` - Visualization
+
+Optional:
+- `presidio-analyzer`, `presidio-anonymizer` - PII detection (anonymization utility only)
 
 **Why curl-cffi?** The ChatGPT backend API uses Cloudflare bot detection. `curl-cffi` provides browser impersonation that bypasses these protections.
 
@@ -155,6 +165,47 @@ The cleaning script applies minimal destructive text normalization:
 --skip-markdown-cleaning     # Skip markdown cleaning
 ```
 
+### Alignment Analysis
+
+**Compute semantic alignment (sentence embeddings):**
+```bash
+python -m analysis.semantic_alignment
+```
+
+Computes semantic similarity using all-mpnet-base-v2 model. Creates turn pairs (user→assistant and assistant→user) and computes cosine similarity between sentence embeddings.
+
+**Compute sentiment alignment:**
+```bash
+python -m analysis.sentiment_alignment
+```
+
+Computes sentiment similarity using distilbert sentiment model. Maps sentiment to [-1, 1] polarity and computes similarity as `1 - |difference|/2`.
+
+**Generate visualizations:**
+```bash
+python -m analysis.plots_alignment
+```
+
+Generates plots for semantic and sentiment alignment including distributions, temporal dynamics, model comparisons, and correlations.
+
+**Options:**
+```bash
+# Semantic alignment
+--model NAME                 # Sentence transformer model (default: all-mpnet-base-v2)
+--batch-size N               # Batch size (default: 256)
+--device auto|cpu|cuda       # Computation device (default: auto)
+--force-recompute            # Ignore cached embeddings
+
+# Sentiment alignment
+--from-conversations PATH    # Load from conversations JSONL instead of semantic_alignment.csv
+--model NAME                 # Sentiment model (default: distilbert-base-uncased-finetuned-sst-2-english)
+
+# Plots
+--format png|pdf|svg         # Output format (default: png)
+--dpi N                      # DPI for raster formats (default: 150)
+--output-dir PATH            # Output directory (default: analysis/plots)
+```
+
 ### Command-Line Options
 
 **Main Pipeline (`main.py`):**
@@ -200,6 +251,27 @@ The cleaning script applies minimal destructive text normalization:
 - `--skip-language-filter` - Skip language detection
 - `--skip-markdown-cleaning` - Skip markdown normalization
 
+**Semantic Alignment (`analysis/semantic_alignment.py`):**
+- `--input PATH` - Input JSONL (default: `data/conversations_english.jsonl`)
+- `--output PATH` - Output CSV (default: `analysis/semantic_alignment.csv`)
+- `--model NAME` - Sentence transformer model (default: `all-mpnet-base-v2`)
+- `--batch-size N` - Batch size (default: 256)
+- `--device auto|cpu|cuda` - Computation device (default: auto)
+- `--force-recompute` - Ignore cached embeddings
+
+**Sentiment Alignment (`analysis/sentiment_alignment.py`):**
+- `--input PATH` - Input CSV from semantic_alignment (default: `analysis/semantic_alignment.csv`)
+- `--from-conversations PATH` - Alternatively load from conversations JSONL
+- `--output PATH` - Output CSV (default: `analysis/sentiment_alignment.csv`)
+- `--model NAME` - Sentiment model (default: `distilbert-base-uncased-finetuned-sst-2-english`)
+- `--force-recompute` - Ignore cached sentiment scores
+
+**Plots (`analysis/plots_alignment.py`):**
+- `--input PATH` - Input CSV (default: `analysis/sentiment_alignment.csv`)
+- `--output-dir PATH` - Output directory (default: `analysis/plots`)
+- `--format png|pdf|svg` - Output format (default: png)
+- `--dpi N` - DPI for raster formats (default: 150)
+
 ## Output Schema
 
 The pipeline produces multiple JSONL files with comprehensive metadata.
@@ -243,6 +315,35 @@ Each line contains metadata for one Reddit comment with ChatGPT share link(s):
   "source_post_id": "abc123"
 }
 ```
+
+## Data Folder Structure
+
+To keep the repository clean while preserving a clear workflow, data artifacts are organized under `data/`:
+
+- raw: source dumps collected from APIs
+  - reddit_posts.jsonl, reddit_comments.jsonl, conversations.jsonl
+- processed: cleaned, curated datasets ready for analysis
+  - conversations_english.jsonl, anonymized_conversations.jsonl, df_pairs.csv
+- derived: computed arrays and intermediate features
+  - assistant_embeddings.npy, user_embeddings.npy, semantic_similarity.npy, message_sentiment.npy
+- outputs/topics: topic modeling outputs
+  - conversations_with_topics.csv, topic_distributions.png, combined_measures.csv
+
+Only `data/README.md` is tracked in Git; all other files are ignored via `.gitignore`.
+
+## Topic Modeling (Three Models)
+
+Run the KeyNMF pipeline over user-only, assistant-only, and combined documents:
+
+```bash
+python -m analysis.topic_modeling --input ../data/processed/conversations_english.jsonl --keywords 9 --plot
+```
+
+Outputs are saved to `data/outputs/topics/`.
+
+## Combined Analysis
+
+Use `analysis/combined_analysis.ipynb` to merge topic assignments with sentiment aggregates and produce plots. It writes `combined_measures.csv` under `data/outputs/topics/`.
 
 **Note:** The `share_urls` field contains all ChatGPT share URLs extracted from the comment body. The pattern matches various URL formats:
 - `https://chatgpt.com/share/...`
@@ -358,29 +459,6 @@ Each line contains full conversation data with enhanced metadata:
 
 **Content Types:** `text`, `code`, `execution_output`, `multimodal_text`, `model_editable_context` (custom instructions)
 
-## Data Quality & Deduplication
-
-### Deduplication
-
-The pipeline implements multiple levels of deduplication to ensure data integrity:
-
-1. **Reddit Post Level** - Deduplication by post ID during Stage 1 collection
-2. **Reddit Comment Level** - Deduplication by comment ID during Stage 2 collection
-3. **Share ID Level** - Same ChatGPT share URL appearing in multiple Reddit posts/comments is collected once
-4. **Resume Protection** - `--resume` flag skips shares already in output file (idempotent operation)
-
-No data loss occurs during deduplication - the `reddit_sources` array preserves all Reddit posts and comments that referenced each share.
-
-### Data Verification
-
-Each conversation record includes:
-- `fetch_success` - Boolean indicating successful fetch
-- `status_code` - HTTP response code
-- `error` - Error message if fetch failed
-- `fetched_at` / `fetched_at_iso` - Collection timestamp for reproducibility
-
-Failed fetches can be retried using `--refresh-missing` flag.
-
 ## Reproducibility
 
 This project is designed for research reproducibility:
@@ -444,22 +522,41 @@ This project is designed for research reproducibility:
 
 ```
 AlignmentUnderUse/
-├── data/                        # Data directory (not included in repository)
-│   ├── reddit_posts.jsonl       # Reddit posts with ChatGPT share links
-│   ├── reddit_comments.jsonl    # Reddit comments with ChatGPT share links
-│   ├── conversations.jsonl      # Full conversation data with enhanced metadata
-│   └── conversations_english.jsonl  # Cleaned English-only conversations (used for analysis)
-├── data_collection/
-│   ├── main.py                  # Pipeline orchestrator (3 stages)
-│   ├── collect_reddit_posts.py  # Stage 1: Reddit post collection via Arctic Shift
-│   ├── collect_reddit_comments.py  # Stage 2: Reddit comments collection via Arctic Shift
-│   ├── collect_conversations.py    # Stage 3: Conversation fetching via ChatGPT backend API
-│   ├── arctic_shift_api.py      # Arctic Shift API client (posts + comments endpoints)
-│   └── io_utils.py              # JSONL I/O utilities
-└── analysis/
-    ├── data_cleaning.py         # Text normalization and language filtering (analysis pipeline)
-    ├── anonymize_data.py        # Optional utility for PII removal (not used in analysis)
-    └── initial_data_inspection.ipynb  # Data analysis notebook
+├── analysis/
+│   ├── combined_analysis.ipynb      # Merge topics + sentiment, plots
+│   ├── topic_modeling.py            # Three-model KeyNMF pipeline
+│   ├── anonymize_data.py            # Optional PII anonymization utility
+│   ├── data_cleaning.py             # Text normalization and language filtering
+│   ├── plots_alignment.py           # Alignment visualization
+│   ├── semantic_alignment.py        # Semantic similarity (sentence embeddings)
+│   └── sentiment_alignment.py       # Sentiment similarity
+├── data/                            # Ignored in Git (except README.md)
+│   ├── README.md                    # Tracked; documents data layout
+│   ├── raw/                         # Source dumps collected from APIs
+│   │   ├── reddit_posts.jsonl
+│   │   ├── reddit_comments.jsonl
+│   │   └── conversations.jsonl
+│   ├── processed/                   # Cleaned datasets ready for analysis
+│   │   ├── conversations_english.jsonl
+│   │   └── anonymized_conversations.jsonl
+│   ├── derived/                     # Computed arrays and intermediate features
+│   │   ├── assistant_embeddings.npy
+│   │   ├── user_embeddings.npy
+│   │   ├── semantic_similarity.npy
+│   │   ├── message_sentiment.npy
+│   │   └── message_ids_sentiment.npy
+│   └── outputs/
+│       └── topics/
+│           ├── conversations_with_topics.csv
+│           ├── topic_distributions.png
+│           └── combined_measures.csv
+└── data_collection/
+  ├── arctic_shift_api.py          # Arctic Shift API client (posts + comments)
+  ├── collect_reddit_posts.py      # Stage 1: Reddit post collection
+  ├── collect_reddit_comments.py   # Stage 2: Reddit comments collection
+  ├── collect_conversations.py     # Stage 3: ChatGPT conversation fetching
+  ├── io_utils.py                  # JSONL IO utilities
+  └── main.py                      # Pipeline orchestrator (3 stages)
 ```
 
 ## Data Availability & Ethics

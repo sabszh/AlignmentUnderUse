@@ -24,11 +24,9 @@ venv.bak/
 
 # Project-specific: AlignmentUnderUse
 # Data collection outputs (large JSONL files)
-data/bin
-data/*.jsonl
-data/*npy
-data/*zip
-data/*csv
+data/**
+!data/README.md
+
 
 # Analysis outputs and notebooks
 analysis/data/*.jsonl

@@ -481,13 +481,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--input",
         nargs="+",
-        default=["../data/reddit_posts.jsonl", "..data/reddit_comments.jsonl"],
-        help="JSONL files with Reddit posts/comments (default: data/reddit_posts.jsonl data/reddit_comments.jsonl)",
+        default=["../data/raw/reddit_posts.jsonl", "../data/raw/reddit_comments.jsonl"],
+        help="JSONL files with Reddit posts/comments (default: data/raw/reddit_posts.jsonl data/raw/reddit_comments.jsonl)",
     )
     parser.add_argument(
         "--output",
-        default="../data/conversations.jsonl",
-        help="Output JSONL file (default: data/conversations.jsonl)",
+        default="../data/raw/conversations.jsonl",
+        help="Output JSONL file (default: data/raw/conversations.jsonl)",
     )
     parser.add_argument(
         "--limit",

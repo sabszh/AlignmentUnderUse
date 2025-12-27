@@ -236,10 +236,35 @@ def clean_message_text(messages, skip_cleaning=False):
     return messages
 
 
+def remove_custom_instruction_notice(messages):
+    """Scrub the custom-instruction notice from any message (any role).
+
+    Uses a case-insensitive regex to replace the phrase with an empty string.
+    """
+    if not isinstance(messages, list):
+        return messages
+
+    pattern = regex.compile(r"original\s+custom\s+instructions\s+no\s+longer\s+available", regex.IGNORECASE)
+
+    cleaned = []
+    for m in messages:
+        if not isinstance(m, dict):
+            cleaned.append(m)
+            continue
+
+        text = (m.get('text') or '')
+        if pattern.search(text):
+            text = pattern.sub("", text).strip()
+            m = dict(m)
+            m['text'] = text
+
+        cleaned.append(m)
+
+    return cleaned
+
+
 def detect_conversation_language(messages):
     """Detect dominant language in a conversation by combining all user+assistant text.
-    
-    Uses langid for faster, more accurate detection (especially on short texts).
     
     Returns tuple: (language_code, char_count, is_low_confidence, confidence_score)
     
@@ -432,6 +457,10 @@ def main():
         )
         
         print("Markdown cleaning complete!")
+
+    # Filter out specific system notice messages
+    print("\nFiltering system notice: 'Original custom instructions no longer available' ...")
+    df_clean['messages'] = df_clean['messages'].apply(remove_custom_instruction_notice)
     
     # Derive structural features BEFORE anonymization
     print("\nDeriving structural features...")
@@ -457,7 +486,6 @@ def main():
         df_final = df_clean
     else:
         print("\nDetecting language for each conversation...")
-        print("(Using langid - fast and accurate on short texts)")
         
         # Detect language and get metadata
         lang_results = df_clean['messages'].apply(detect_conversation_language)
