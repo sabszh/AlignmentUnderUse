@@ -29,8 +29,8 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--output-dir",
-        default="../data",
-        help="Output directory relative to data_collection (default: data)",
+        default="../data/raw",
+        help="Output directory relative to data_collection (default: data/raw)",
     )
 
     parser.add_argument(

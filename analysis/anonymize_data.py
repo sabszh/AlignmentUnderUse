@@ -253,14 +253,14 @@ def parse_args():
     
     parser.add_argument(
         "--input",
-        default="data/conversations_english.jsonl",
-        help="Input JSONL file (default: data/conversations_english.jsonl)",
+        default="../data/processed/conversations_english.jsonl",
+        help="Input JSONL file (default: data/processed/conversations_english.jsonl)",
     )
     
     parser.add_argument(
         "--output",
-        default="data/anonymized_conversations.jsonl",
-        help="Output JSONL file (default: data/anonymized_conversations.jsonl)",
+        default="../data/processed/anonymized_conversations.jsonl",
+        help="Output JSONL file (default: data/processed/anonymized_conversations.jsonl)",
     )
     
     parser.add_argument(
@@ -291,6 +291,13 @@ def main():
     
     # Setup paths
     input_path = Path(args.input).resolve()
+    # Fallback to legacy location if missing
+    if not input_path.exists():
+        legacy_input = Path(__file__).resolve().parent / "../data/conversations_english.jsonl"
+        if legacy_input.exists():
+            print(f"[anonymize_data] Input not found; using legacy path: {legacy_input}")
+            input_path = legacy_input
+
     output_path = Path(args.output).resolve()
     
     output_path.parent.mkdir(parents=True, exist_ok=True)
