@@ -24,8 +24,16 @@ venv.bak/
 
 # Project-specific: AlignmentUnderUse
 # Data collection outputs (large JSONL files)
+# Keep folder structure but ignore all contents
 data/**
+!data/
 !data/README.md
+!data/raw/
+!data/processed/
+!data/derived/
+!data/outputs/
+!data/outputs/topics/
+!data/bin/
 
 
 # Analysis outputs and notebooks
