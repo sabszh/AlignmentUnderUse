@@ -10,9 +10,9 @@ Uses Microsoft Presidio to anonymize only high-risk personally identifiable info
 This is a post-processing step for ethical data sharing.
 
 Usage:
-    python -m analysis.anonymize_data
-    python -m analysis.anonymize_data --input data/conversations_english.jsonl --output data/anonymized.jsonl
-    python -m analysis.anonymize_data --limit 100 --verbose
+    python -m src.processing.anonymize
+    python -m src.processing.anonymize --input data/processed/conversations_english.jsonl --output data/processed/anonymized_conversations.jsonl
+    python -m src.processing.anonymize --limit 100 --verbose
 """
 
 import argparse
@@ -253,13 +253,13 @@ def parse_args():
     
     parser.add_argument(
         "--input",
-        default="../data/processed/conversations_english.jsonl",
+        default="data/processed/conversations_english.jsonl",
         help="Input JSONL file (default: data/processed/conversations_english.jsonl)",
     )
     
     parser.add_argument(
         "--output",
-        default="../data/processed/anonymized_conversations.jsonl",
+        default="data/processed/anonymized_conversations.jsonl",
         help="Output JSONL file (default: data/processed/anonymized_conversations.jsonl)",
     )
     
@@ -291,13 +291,6 @@ def main():
     
     # Setup paths
     input_path = Path(args.input).resolve()
-    # Fallback to legacy location if missing
-    if not input_path.exists():
-        legacy_input = Path(__file__).resolve().parent / "../data/conversations_english.jsonl"
-        if legacy_input.exists():
-            print(f"[anonymize_data] Input not found; using legacy path: {legacy_input}")
-            input_path = legacy_input
-
     output_path = Path(args.output).resolve()
     
     output_path.parent.mkdir(parents=True, exist_ok=True)

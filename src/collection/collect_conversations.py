@@ -6,9 +6,9 @@ fetches conversations from ChatGPT backend API, and writes structured
 conversation data to JSONL.
 
 Usage:
-    python -m data_collection.collect_conversations
-    python -m data_collection.collect_conversations --input data/reddit_posts.jsonl data/reddit_comments.jsonl
-    python -m data_collection.collect_conversations --limit 10 --resume
+    python -m src.collection.collect_conversations
+    python -m src.collection.collect_conversations --input data/raw/reddit_posts.jsonl data/raw/reddit_comments.jsonl
+    python -m src.collection.collect_conversations --limit 10 --resume
 """
 
 import argparse
@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 from curl_cffi import requests
 from tqdm import tqdm
 
-from .io_utils import ensure_dir
+from src.utils.io_utils import ensure_dir
 
 BASE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36",
@@ -481,12 +481,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--input",
         nargs="+",
-        default=["../data/raw/reddit_posts.jsonl", "../data/raw/reddit_comments.jsonl"],
+        default=["data/raw/reddit_posts.jsonl", "data/raw/reddit_comments.jsonl"],
         help="JSONL files with Reddit posts/comments (default: data/raw/reddit_posts.jsonl data/raw/reddit_comments.jsonl)",
     )
     parser.add_argument(
         "--output",
-        default="../data/raw/conversations.jsonl",
+        default="data/raw/conversations.jsonl",
         help="Output JSONL file (default: data/raw/conversations.jsonl)",
     )
     parser.add_argument(
@@ -539,9 +539,8 @@ def main() -> None:
     """
     args = parse_args()
     
-    base_dir = Path(__file__).resolve().parent
-    input_paths = [base_dir / Path(p) for p in args.input]
-    output_path = base_dir / args.output
+    input_paths = [Path(p).resolve() for p in args.input]
+    output_path = Path(args.output).resolve()
     
     ensure_dir(str(output_path.parent))
     

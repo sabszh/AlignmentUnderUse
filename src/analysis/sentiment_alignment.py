@@ -18,10 +18,10 @@ Sentiment similarity interpretation:
 - 0.0: Opposite sentiments (very negative vs very positive)
 
 Usage:
-    python -m analysis.sentiment_alignment
-    python -m analysis.sentiment_alignment --input analysis/semantic_alignment.csv
-    python -m analysis.sentiment_alignment --output analysis/sentiment_alignment.csv
-    python -m analysis.sentiment_alignment --from-conversations data/conversations_english.jsonl
+    python -m src.analysis.sentiment_alignment
+    python -m src.analysis.sentiment_alignment --input data/derived/semantic_alignment.csv
+    python -m src.analysis.sentiment_alignment --output data/derived/sentiment_alignment.csv
+    python -m src.analysis.sentiment_alignment --from-conversations data/processed/conversations_english.jsonl
 """
 
 import argparse
@@ -33,7 +33,7 @@ import pandas as pd
 from transformers import pipeline
 from tqdm.auto import tqdm
 
-from analysis.turn_schema import TURN_SCHEMA
+from ..schemas.turn import TURN_SCHEMA
 
 def parse_args():
     """Parse command line arguments."""
@@ -43,8 +43,8 @@ def parse_args():
     
     parser.add_argument(
         "--input",
-        default="analysis/semantic_alignment.csv",
-        help="Input CSV with turn pairs from semantic_alignment.py (default: analysis/semantic_alignment.csv)",
+        default="data/derived/semantic_alignment.csv",
+        help="Input CSV with turn pairs from semantic_alignment.py (default: data/derived/semantic_alignment.csv)",
     )
     
     parser.add_argument(
@@ -61,14 +61,14 @@ def parse_args():
     
     parser.add_argument(
         "--output",
-        default="analysis/sentiment_alignment.csv",
-        help="Output CSV file for turn-level sentiment alignment (default: analysis/sentiment_alignment.csv)",
+        default="data/derived/sentiment_alignment.csv",
+        help="Output CSV file for turn-level sentiment alignment (default: data/derived/sentiment_alignment.csv)",
     )
     
     parser.add_argument(
         "--cache-dir",
-        default="data",
-        help="Directory for caching sentiment scores (default: data)",
+        default="data/derived",
+        help="Directory for caching sentiment scores (default: data/derived)",
     )
     
     parser.add_argument(
@@ -127,7 +127,7 @@ def load_from_conversations(conversations_path):
     print(f"[sentiment_alignment] Loading conversations from: {conversations_path}")
     
     # Import the functions from semantic_alignment
-    from analysis.semantic_alignment import load_messages, create_turn_pairs
+    from .semantic_alignment import load_messages, create_turn_pairs
     
     df_messages = load_messages(conversations_path)
     df_pairs = create_turn_pairs(df_messages)
@@ -137,7 +137,7 @@ def load_from_conversations(conversations_path):
 
 def build_message_text_lookup(conversations_path):
     """Build message_id -> text lookup from conversations JSONL."""
-    from analysis.semantic_alignment import load_messages
+    from .semantic_alignment import load_messages
     
     df_messages = load_messages(conversations_path)
     return dict(zip(df_messages["message_id"], df_messages["text"]))

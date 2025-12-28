@@ -36,6 +36,7 @@ data/
 │   ├── message_sentiment.npy
 │   └── lsm_scores.csv
 ├── outputs/
+│   ├── merged.csv                # All features merged for analysis (from merge_all.py)
 │   └── topics/                   # Topic modeling outputs
 │       ├── conversations_with_topics.csv
 │       ├── combined_measures.csv
@@ -45,4 +46,4 @@ data/
 
 **Only `README.md` is tracked in Git.** All other files are ignored via `.gitignore`.
 
-See the main README for full documentation on the data schema and collection process.
+See the main README for full documentation on the data schema, collection, and merging process.

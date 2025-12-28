@@ -2,8 +2,8 @@
 Fetch Reddit posts containing ChatGPT share links from Arctic Shift API.
 
 Usage:
-    python -m data_collection.collect_reddit_posts
-    python -m data_collection.collect_reddit_posts --output-dir data --outfile reddit_posts.jsonl
+    python -m src.collection.collect_reddit_posts
+    python -m src.collection.collect_reddit_posts --output-dir data/raw --outfile reddit_posts.jsonl
 """
 
 import argparse
@@ -14,7 +14,7 @@ from typing import Set
 from tqdm import tqdm
 
 from .arctic_shift_api import fetch_chatgpt_share_posts, normalize_post
-from .io_utils import ensure_dir, write_jsonl
+from src.utils.io_utils import ensure_dir, write_jsonl
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,8 +29,8 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--output-dir",
-        default="../data/raw",
-        help="Output directory relative to data_collection (default: data/raw)",
+        default="data/raw",
+        help="Output directory (default: data/raw)",
     )
 
     parser.add_argument(
@@ -136,8 +136,7 @@ def main() -> None:
     args = parse_args()
 
     # Setup output path
-    base_dir = Path(__file__).resolve().parent
-    output_dir = base_dir / args.output_dir
+    output_dir = Path(args.output_dir).resolve()
     ensure_dir(str(output_dir))
     out_path = output_dir / args.outfile
 

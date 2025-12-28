@@ -8,9 +8,9 @@ Strategy:
 4. Save to reddit_comments.jsonl
 
 Usage:
-    python -m data_collection.collect_reddit_comments
-    python -m data_collection.collect_reddit_comments --posts-file data/reddit_posts.jsonl
-    python -m data_collection.collect_reddit_comments --max-posts 100 --dry-run
+    python -m src.collection.collect_reddit_comments
+    python -m src.collection.collect_reddit_comments --posts-file data/raw/reddit_posts.jsonl
+    python -m src.collection.collect_reddit_comments --max-posts 100 --dry-run
 """
 
 import argparse
@@ -25,7 +25,7 @@ import requests
 from tqdm import tqdm
 
 from .arctic_shift_api import COMMENTS_API_URL, normalize_comment
-from .io_utils import ensure_dir, write_jsonl
+from src.utils.io_utils import ensure_dir, write_jsonl
 
 
 def parse_args() -> argparse.Namespace:
@@ -40,14 +40,14 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--posts-file",
-        default="../data/raw/reddit_posts.jsonl",
+        default="data/raw/reddit_posts.jsonl",
         help="Input JSONL file with Reddit posts (default: data/raw/reddit_posts.jsonl)",
     )
 
     parser.add_argument(
         "--output-dir",
-        default="../data/raw",
-        help="Output directory relative to data_collection (default: data/raw)",
+        default="data/raw",
+        help="Output directory (default: data/raw)",
     )
 
     parser.add_argument(
@@ -160,9 +160,8 @@ def main() -> None:
     args = parse_args()
 
     # Setup paths
-    base_dir = Path(__file__).resolve().parent
-    posts_path = base_dir / args.posts_file
-    output_dir = base_dir / args.output_dir
+    posts_path = Path(args.posts_file).resolve()
+    output_dir = Path(args.output_dir).resolve()
     ensure_dir(str(output_dir))
     out_path = output_dir / args.outfile
 

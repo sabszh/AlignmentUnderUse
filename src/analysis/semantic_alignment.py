@@ -19,10 +19,10 @@ The script supports caching at multiple levels:
 - Similarity scores (per turn pair)
 
 Usage:
-    python -m analysis.semantic_alignment
-    python -m analysis.semantic_alignment --input data/conversations_english.jsonl
-    python -m analysis.semantic_alignment --output analysis/semantic_alignment.csv
-    python -m analysis.semantic_alignment --force-recompute  # Ignore cached embeddings
+    python -m src.analysis.semantic_alignment
+    python -m src.analysis.semantic_alignment --input data/processed/conversations_english.jsonl
+    python -m src.analysis.semantic_alignment --output data/derived/semantic_alignment.csv
+    python -m src.analysis.semantic_alignment --force-recompute  # Ignore cached embeddings
 """
 
 import argparse
@@ -33,7 +33,7 @@ import numpy as np
 import pandas as pd
 from sentence_transformers import SentenceTransformer
 
-from analysis.turn_schema import TURN_SCHEMA
+from ..schemas.turn import TURN_SCHEMA
 
 
 def parse_args():
@@ -44,20 +44,20 @@ def parse_args():
     
     parser.add_argument(
         "--input",
-        default="data/conversations_english.jsonl",
-        help="Input JSONL file with English conversations (default: data/conversations_english.jsonl)",
+        default="data/processed/conversations_english.jsonl",
+        help="Input JSONL file with English conversations (default: data/processed/conversations_english.jsonl)",
     )
     
     parser.add_argument(
         "--output",
-        default="analysis/semantic_alignment.csv",
-        help="Output CSV file for turn-level semantic alignment (default: analysis/semantic_alignment.csv)",
+        default="data/derived/semantic_alignment.csv",
+        help="Output CSV file for turn-level semantic alignment (default: data/derived/semantic_alignment.csv)",
     )
     
     parser.add_argument(
         "--embeddings-cache-dir",
-        default="data",
-        help="Directory for caching embeddings (default: data)",
+        default="data/derived",
+        help="Directory for caching embeddings (default: data/derived)",
     )
     
     parser.add_argument(

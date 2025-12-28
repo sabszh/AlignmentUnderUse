@@ -23,6 +23,11 @@ venv.bak/
 .ruff_cache/
 
 # Project-specific: AlignmentUnderUse
+# Testing and bin directories
+**/testing/
+**/bin/
+.bin/
+
 # Data collection outputs (large JSONL files)
 # Keep folder structure but ignore all contents
 data/**
@@ -33,8 +38,7 @@ data/**
 !data/derived/
 !data/outputs/
 !data/outputs/topics/
-!data/bin/
-
+.bin/*
 
 # Analysis outputs and notebooks
 analysis/data/*.jsonl

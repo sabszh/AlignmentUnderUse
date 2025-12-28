@@ -7,11 +7,11 @@ Runs three stages of data collection:
 3. Collect conversation data from all discovered ChatGPT share URLs
 
 Usage:
-    python -m data_collection.main
-    python -m data_collection.main --reddit-only
-    python -m data_collection.main --comments-only
-    python -m data_collection.main --conversations-only
-    python -m data_collection.main --limit 50
+    python -m src.collection.main
+    python -m src.collection.main --reddit-only
+    python -m src.collection.main --comments-only
+    python -m src.collection.main --conversations-only
+    python -m src.collection.main --limit 50
 """
 
 import argparse
@@ -69,8 +69,8 @@ def parse_args() -> argparse.Namespace:
     
     parser.add_argument(
         "--output-dir",
-        default="data",
-        help="Output directory (default: data)",
+        default="data/raw",
+        help="Output directory (default: data/raw)",
     )
     
     parser.add_argument(
@@ -124,7 +124,7 @@ def run_reddit_collection(
     print("=" * 60 + "\n")
     
     cmd = [
-        sys.executable, "-m", "data_collection.collect_reddit_posts",
+        sys.executable, "-m", "src.collection.collect_reddit_posts",
         "--output-dir", output_dir,
         "--outfile", "reddit_posts.jsonl",
         "--max-pages", str(max_pages)
@@ -157,7 +157,7 @@ def run_comments_collection(
     print("=" * 60 + "\n")
     
     cmd = [
-        sys.executable, "-m", "data_collection.collect_reddit_comments",
+        sys.executable, "-m", "src.collection.collect_reddit_comments",
         "--posts-file", f"{output_dir}/reddit_posts.jsonl",
         "--output-dir", output_dir,
         "--outfile", "reddit_comments.jsonl",
@@ -194,7 +194,7 @@ def run_conversation_collection(
     
     # Collect from both posts and comments
     cmd = [
-        sys.executable, "-m", "data_collection.collect_conversations",
+        sys.executable, "-m", "src.collection.collect_conversations",
         "--input", f"{output_dir}/reddit_posts.jsonl", f"{output_dir}/reddit_comments.jsonl",
         "--output", f"{output_dir}/conversations.jsonl"
     ]
@@ -266,17 +266,17 @@ def main() -> None:
     print("=" * 60)
     
     if run_reddit:
-        reddit_path = Path(__file__).parent / args.output_dir / "reddit_posts.jsonl"
+        reddit_path = Path(args.output_dir).resolve() / "reddit_posts.jsonl"
         if reddit_path.exists():
             print(f"Reddit posts: {reddit_path}")
     
     if run_comments:
-        comments_path = Path(__file__).parent / args.output_dir / "reddit_comments.jsonl"
+        comments_path = Path(args.output_dir).resolve() / "reddit_comments.jsonl"
         if comments_path.exists():
             print(f"Reddit comments: {comments_path}")
     
     if run_conversations:
-        conv_path = Path(__file__).parent / args.output_dir / "conversations.jsonl"
+        conv_path = Path(args.output_dir).resolve() / "conversations.jsonl"
         if conv_path.exists():
             print(f"Conversations: {conv_path}")
     

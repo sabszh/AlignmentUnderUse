@@ -25,9 +25,9 @@ Processing steps:
 NOTE: Privacy protection (anonymization) is handled in a SEPARATE step.
 
 Usage:
-    python -m analysis.data_cleaning
-    python -m analysis.data_cleaning --input data/conversations.jsonl --output data/conversations_clean.jsonl
-    python -m analysis.data_cleaning --skip-markdown-cleaning  # Keep original formatting
+    python -m src.processing.cleaning
+    python -m src.processing.cleaning --input data/raw/conversations.jsonl --output data/processed/conversations_english.jsonl
+    python -m src.processing.cleaning --skip-markdown-cleaning  # Keep original formatting
 """
 
 import argparse
@@ -386,14 +386,14 @@ def parse_args():
     
     parser.add_argument(
         "--input",
-        default="data/conversations.jsonl",
-        help="Input JSONL file with conversations (default: data/conversations.jsonl)",
+        default="data/raw/conversations.jsonl",
+        help="Input JSONL file with conversations (default: data/raw/conversations.jsonl)",
     )
     
     parser.add_argument(
         "--output",
-        default="data/conversations_english.jsonl",
-        help="Output JSONL file for cleaned English conversations (default: data/conversations_english.jsonl)",
+        default="data/processed/conversations_english.jsonl",
+        help="Output JSONL file for cleaned English conversations (default: data/processed/conversations_english.jsonl)",
     )
     
     parser.add_argument(

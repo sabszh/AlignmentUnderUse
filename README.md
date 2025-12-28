@@ -104,49 +104,51 @@ export CHATGPT_COOKIE="your_cookie"
 
 ## Usage
 
+Run all commands from the repository root so the `src` package is discoverable.
+
 ### Pipeline Execution
 
 **Run full pipeline:**
 ```bash
-python -m data_collection.main
+python -m src.collection.main
 ```
 
 **Resume interrupted collection:**
 ```bash
-python -m data_collection.main --resume
+python -m src.collection.main --resume
 ```
 
 **Refresh failed fetches:**
 ```bash
-python -m data_collection.main --resume --refresh-missing
+python -m src.collection.main --resume --refresh-missing
 ```
 
 **Run individual stages:**
 ```bash
 # Stage 1 only: Reddit posts
-python -m data_collection.main --reddit-only
+python -m src.collection.main --reddit-only
 
 # Stage 2 only: Reddit comments (requires reddit_posts.jsonl)
-python -m data_collection.main --comments-only
+python -m src.collection.main --comments-only
 
 # Stage 3 only: Conversations (requires reddit_posts.jsonl and reddit_comments.jsonl)
-python -m data_collection.main --conversations-only
+python -m src.collection.main --conversations-only
 ```
 
 **Limit collection for testing:**
 ```bash
 # Limit conversations to fetch
-python -m data_collection.main --limit 100
+python -m src.collection.main --limit 100
 
 # Limit posts to process for comments
-python -m data_collection.main --max-comments-posts 10
+python -m src.collection.main --max-comments-posts 10
 ```
 
 ### Data Cleaning
 
 **Clean and filter dataset:**
 ```bash
-python -m analysis.data_cleaning
+python -m src.processing.cleaning
 ```
 
 The cleaning script applies minimal destructive text normalization:
@@ -158,8 +160,8 @@ The cleaning script applies minimal destructive text normalization:
 
 **Options:**
 ```bash
---input PATH                 # Input file (default: data/conversations.jsonl)
---output PATH                # Output file (default: data/conversations_english.jsonl)
+--input PATH                 # Input file (default: data/raw/conversations.jsonl)
+--output PATH                # Output file (default: data/processed/conversations_english.jsonl)
 --output-all-clean PATH      # Save all successful fetches before language filtering
 --skip-language-filter       # Skip language detection
 --skip-markdown-cleaning     # Skip markdown cleaning
@@ -169,24 +171,17 @@ The cleaning script applies minimal destructive text normalization:
 
 **Compute semantic alignment (sentence embeddings):**
 ```bash
-python -m analysis.semantic_alignment
+python -m src.analysis.semantic_alignment
 ```
 
 Computes semantic similarity using all-mpnet-base-v2 model. Creates turn pairs (user→assistant and assistant→user) and computes cosine similarity between sentence embeddings.
 
 **Compute sentiment alignment:**
 ```bash
-python -m analysis.sentiment_alignment
+python -m src.analysis.sentiment_alignment
 ```
 
 Computes sentiment similarity using distilbert sentiment model. Maps sentiment to [-1, 1] polarity and computes similarity as `1 - |difference|/2`.
-
-**Generate visualizations:**
-```bash
-python -m analysis.plots_alignment
-```
-
-Generates plots for semantic and sentiment alignment including distributions, temporal dynamics, model comparisons, and correlations.
 
 **Options:**
 ```bash
@@ -200,15 +195,31 @@ Generates plots for semantic and sentiment alignment including distributions, te
 --from-conversations PATH    # Load from conversations JSONL instead of semantic_alignment.csv
 --model NAME                 # Sentiment model (default: distilbert-base-uncased-finetuned-sst-2-english)
 
-# Plots
---format png|pdf|svg         # Output format (default: png)
---dpi N                      # DPI for raster formats (default: 150)
---output-dir PATH            # Output directory (default: analysis/plots)
 ```
+
+### End-to-End Analysis Script
+
+Run the full analysis pipeline (semantic, sentiment, LSM, optional topics) and archive outputs:
+
+```bash
+bash scripts/run_analysis_pipeline.sh \
+  data/processed/conversations_english.jsonl \
+  data/derived \
+  data/outputs \
+  false \
+  true
+```
+
+Arguments (all optional, shown in order):
+- input JSONL path (default: `data/processed/conversations_english.jsonl`)
+- derived output dir (default: `data/derived`)
+- outputs dir (default: `data/outputs`)
+- skip topics (`true` or `false`, default: `false`)
+- verbose (`true` or `false`, default: `true`)
 
 ### Command-Line Options
 
-**Main Pipeline (`main.py`):**
+**Main Pipeline (`src/collection/main.py`):**
 - `--reddit-only` - Only run Reddit post collection
 - `--comments-only` - Only run Reddit comments collection
 - `--conversations-only` - Only run conversation collection
@@ -217,26 +228,26 @@ Generates plots for semantic and sentiment alignment including distributions, te
 - `--comments-delay N` - Delay between comment API requests (default: 0.5s)
 - `--resume` - Resume from previous run
 - `--refresh-missing` - Re-fetch failed attempts when resuming
-- `--output-dir PATH` - Output directory (default: `data`)
+- `--output-dir PATH` - Output directory (default: `data/raw`)
 
-**Reddit Posts Collection (`collect_reddit_posts.py`):**
-- `--output-dir PATH` - Output directory (default: `data`)
+**Reddit Posts Collection (`src/collection/collect_reddit_posts.py`):**
+- `--output-dir PATH` - Output directory (default: `data/raw`)
 - `--outfile NAME` - Output filename (default: `reddit_posts.jsonl`)
 - `--max-pages N` - Max pages to fetch (default: 1, ~1000 posts per page)
 - `--continue` - Continue pagination from last post
 - `--dry-run` - Count matches without writing
 
-**Reddit Comments Collection (`collect_reddit_comments.py`):**
-- `--posts-file PATH` - Input JSONL with posts (default: `data/reddit_posts.jsonl`)
-- `--output-dir PATH` - Output directory (default: `data`)
+**Reddit Comments Collection (`src/collection/collect_reddit_comments.py`):**
+- `--posts-file PATH` - Input JSONL with posts (default: `data/raw/reddit_posts.jsonl`)
+- `--output-dir PATH` - Output directory (default: `data/raw`)
 - `--outfile NAME` - Output filename (default: `reddit_comments.jsonl`)
 - `--max-posts N` - Max posts to process for comments
 - `--delay N` - Delay between API requests (default: 0.5s)
 - `--dry-run` - Count matches without writing
 
-**Conversation Collection (`collect_conversations.py`):**
-- `--input FILES` - Input JSONL files (default: `data/reddit_posts.jsonl`)
-- `--output FILE` - Output file (default: `data/conversations.jsonl`)
+**Conversation Collection (`src/collection/collect_conversations.py`):**
+- `--input FILES` - Input JSONL files (default: `data/raw/reddit_posts.jsonl data/raw/reddit_comments.jsonl`)
+- `--output FILE` - Output file (default: `data/raw/conversations.jsonl`)
 - `--limit N` - Max conversations to fetch
 - `--timeout N` - Request timeout in seconds (default: 15)
 - `--sleep N` - Sleep between requests in seconds (default: 1.0)
@@ -244,33 +255,27 @@ Generates plots for semantic and sentiment alignment including distributions, te
 - `--refresh-missing` - Re-fetch failed attempts when resuming
 - `--keep-raw` - Include raw API response in output
 
-**Data Cleaning (`analysis/data_cleaning.py`):**
-- `--input PATH` - Input file (default: `data/conversations.jsonl`)
-- `--output PATH` - Output file (default: `data/conversations_english.jsonl`)
+**Data Cleaning (`src/processing/cleaning.py`):**
+- `--input PATH` - Input file (default: `data/raw/conversations.jsonl`)
+- `--output PATH` - Output file (default: `data/processed/conversations_english.jsonl`)
 - `--output-all-clean PATH` - Save all successful fetches before language filtering
 - `--skip-language-filter` - Skip language detection
 - `--skip-markdown-cleaning` - Skip markdown normalization
 
-**Semantic Alignment (`analysis/semantic_alignment.py`):**
-- `--input PATH` - Input JSONL (default: `data/conversations_english.jsonl`)
-- `--output PATH` - Output CSV (default: `analysis/semantic_alignment.csv`)
+**Semantic Alignment (`src/analysis/semantic_alignment.py`):**
+- `--input PATH` - Input JSONL (default: `data/processed/conversations_english.jsonl`)
+- `--output PATH` - Output CSV (default: `data/derived/semantic_alignment.csv`)
 - `--model NAME` - Sentence transformer model (default: `all-mpnet-base-v2`)
 - `--batch-size N` - Batch size (default: 256)
 - `--device auto|cpu|cuda` - Computation device (default: auto)
 - `--force-recompute` - Ignore cached embeddings
 
-**Sentiment Alignment (`analysis/sentiment_alignment.py`):**
-- `--input PATH` - Input CSV from semantic_alignment (default: `analysis/semantic_alignment.csv`)
+**Sentiment Alignment (`src/analysis/sentiment_alignment.py`):**
+- `--input PATH` - Input CSV from semantic_alignment (default: `data/derived/semantic_alignment.csv`)
 - `--from-conversations PATH` - Alternatively load from conversations JSONL
-- `--output PATH` - Output CSV (default: `analysis/sentiment_alignment.csv`)
+- `--output PATH` - Output CSV (default: `data/derived/sentiment_alignment.csv`)
 - `--model NAME` - Sentiment model (default: `distilbert-base-uncased-finetuned-sst-2-english`)
 - `--force-recompute` - Ignore cached sentiment scores
-
-**Plots (`analysis/plots_alignment.py`):**
-- `--input PATH` - Input CSV (default: `analysis/sentiment_alignment.csv`)
-- `--output-dir PATH` - Output directory (default: `analysis/plots`)
-- `--format png|pdf|svg` - Output format (default: png)
-- `--dpi N` - DPI for raster formats (default: 150)
 
 ## Output Schema
 
@@ -336,7 +341,7 @@ Only `data/README.md` is tracked in Git; all other files are ignored via `.gitig
 Run the KeyNMF pipeline over user-only, assistant-only, and combined documents:
 
 ```bash
-python -m analysis.topic_modeling --input ../data/processed/conversations_english.jsonl --keywords 9 --plot
+python -m src.analysis.topic_modeling --input data/processed/conversations_english.jsonl --keywords 9 --plot
 ```
 
 Outputs are saved to `data/outputs/topics/`.
@@ -346,17 +351,17 @@ Outputs are saved to `data/outputs/topics/`.
 Compute linguistic style matching scores between sequential user-assistant message pairs:
 
 ```bash
-python -m analysis.lsm_scoring
-python -m analysis.lsm_scoring --input ../data/processed/conversations_english.jsonl --output ../data/outputs/lsm_scores.csv
+python -m src.analysis.lsm_scoring
+python -m src.analysis.lsm_scoring --input data/processed/conversations_english.jsonl --output data/derived/lsm_scores.csv
 ```
 
 LSM measures linguistic alignment across functional word categories: articles, prepositions, pronouns, auxiliary verbs, conjunctions, negations, and common adverbs. No filtering is applied; all conversations are processed.
 
-Output is saved to `data/outputs/lsm_scores.csv` with columns: `conv_id`, `turn`, `lsm_score`.
+Output is saved to `data/derived/lsm_scores.csv` with columns: `conv_id`, `turn`, `lsm_score`.
 
 ## Combined Analysis
 
-Use `analysis/combined_analysis.ipynb` to merge topic assignments with sentiment aggregates and LSM scores to produce plots. It writes `combined_measures.csv` under `data/outputs/topics/`.
+Use `analysis/testing/combined_analysis.ipynb` to merge topic assignments with sentiment aggregates and LSM scores to produce plots. It writes `combined_measures.csv` under `data/outputs/topics/`.
 
 **Note:** The `share_urls` field contains all ChatGPT share URLs extracted from the comment body. The pattern matches various URL formats:
 - `https://chatgpt.com/share/...`
@@ -500,20 +505,20 @@ This project is designed for research reproducibility:
 3. **Run collection:**
    ```bash
    # Full pipeline (posts + comments + conversations)
-   python -m data_collection.main
+   python -m src.collection.main
    
    # Or with limits for testing
-   python -m data_collection.main --limit 100 --max-comments-posts 10
+   python -m src.collection.main --limit 100 --max-comments-posts 10
    ```
 
 4. **Resume if interrupted:**
    ```bash
-   python -m data_collection.main --resume
+   python -m src.collection.main --resume
    ```
 
 5. **Clean and filter data:**
    ```bash
-   python -m analysis.data_cleaning
+   python -m src.processing.cleaning
    ```
 
 ### Rate Limiting
@@ -535,14 +540,26 @@ This project is designed for research reproducibility:
 
 ```
 AlignmentUnderUse/
-├── analysis/
-│   ├── combined_analysis.ipynb      # Merge topics + sentiment, plots
-│   ├── topic_modeling.py            # Three-model KeyNMF pipeline
-│   ├── anonymize_data.py            # Optional PII anonymization utility
-│   ├── data_cleaning.py             # Text normalization and language filtering
-│   ├── plots_alignment.py           # Alignment visualization
-│   ├── semantic_alignment.py        # Semantic similarity (sentence embeddings)
-│   └── sentiment_alignment.py       # Sentiment similarity
+├── src/
+│   ├── analysis/
+│   │   ├── topic_modeling.py        # Three-model KeyNMF pipeline
+│   │   ├── semantic_alignment.py    # Semantic similarity (sentence embeddings)
+│   │   ├── sentiment_alignment.py   # Sentiment similarity
+│   │   ├── lsm_scoring.py           # Linguistic style matching
+│   │   └── merge_all.py             # Merge outputs for downstream analysis
+│   ├── collection/
+│   │   ├── arctic_shift_api.py      # Arctic Shift API client (posts + comments)
+│   │   ├── collect_reddit_posts.py  # Stage 1: Reddit post collection
+│   │   ├── collect_reddit_comments.py # Stage 2: Reddit comments collection
+│   │   ├── collect_conversations.py # Stage 3: ChatGPT conversation fetching
+│   │   └── main.py                  # Pipeline orchestrator (3 stages)
+│   ├── processing/
+│   │   ├── cleaning.py              # Text normalization + language filtering
+│   │   └── anonymize.py             # Optional PII anonymization utility
+│   ├── schemas/
+│   │   └── turn.py                  # Turn-level schema constants
+│   └── utils/
+│       └── io_utils.py              # JSONL IO utilities
 ├── data/                            # Ignored in Git (except README.md)
 │   ├── README.md                    # Tracked; documents data layout
 │   ├── raw/                         # Source dumps collected from APIs
@@ -563,20 +580,15 @@ AlignmentUnderUse/
 │           ├── conversations_with_topics.csv
 │           ├── topic_distributions.png
 │           └── combined_measures.csv
-└── data_collection/
-  ├── arctic_shift_api.py          # Arctic Shift API client (posts + comments)
-  ├── collect_reddit_posts.py      # Stage 1: Reddit post collection
-  ├── collect_reddit_comments.py   # Stage 2: Reddit comments collection
-  ├── collect_conversations.py     # Stage 3: ChatGPT conversation fetching
-  ├── io_utils.py                  # JSONL IO utilities
-  └── main.py                      # Pipeline orchestrator (3 stages)
+└── scripts/
+    └── run_analysis_pipeline.sh     # End-to-end analysis runner
 ```
 
 ## Data Availability & Ethics
 
 ### Analysis Pipeline
 
-**All analysis is performed on raw data.** The data cleaning pipeline (`data_cleaning.py`) performs text normalization and language filtering but does not remove or obscure any identifying information. This preserves the full semantic and structural content needed for discourse and alignment analysis.
+**All analysis is performed on raw data.** The data cleaning pipeline (`src/processing/cleaning.py`) performs text normalization and language filtering but does not remove or obscure any identifying information. This preserves the full semantic and structural content needed for discourse and alignment analysis.
 
 ### Data Release Policy
 
@@ -593,7 +605,7 @@ Privacy risk is managed at the **disclosure boundary**, not during internal comp
 This repository provides:
 - **Data collection pipeline:** Complete code for replicating the collection process
 - **Analysis code:** Data cleaning, feature extraction, and analytical methods
-- **Anonymization utility:** Optional tool for PII removal (`anonymize_data.py`)
+- **Anonymization utility:** Optional tool for PII removal (`src/processing/anonymize.py`)
 
 The anonymization script is **not part of the analytical pipeline.** It is provided as an optional utility for:
 - Inspecting or sharing individual conversation excerpts

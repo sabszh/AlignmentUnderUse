@@ -12,8 +12,8 @@ LSM measures linguistic style similarity across functional word categories:
 articles, prepositions, pronouns, aux_verbs, conjunctions, negations, adverbs.
 
 Usage:
-    python -m analysis.lsm_scoring
-    python -m analysis.lsm_scoring --input ../data/processed/conversations_english.jsonl --output ../data/outputs/lsm_scores.csv
+    python -m src.analysis.lsm_scoring
+    python -m src.analysis.lsm_scoring --input data/processed/conversations_english.jsonl --output data/derived/lsm_scores.csv
 """
 
 import argparse
@@ -26,7 +26,7 @@ from typing import Any, Dict, List
 import numpy as np
 import pandas as pd
 
-from analysis.turn_schema import TURN_SCHEMA
+from ..schemas.turn import TURN_SCHEMA
 
 # --- Configuration ---
 
@@ -262,14 +262,14 @@ def parse_args() -> argparse.Namespace:
     
     parser.add_argument(
         "--input",
-        default="../data/processed/conversations_english.jsonl",
-        help="Input JSONL with conversations (default: ../data/processed/conversations_english.jsonl)",
+        default="data/processed/conversations_english.jsonl",
+        help="Input JSONL with conversations (default: data/processed/conversations_english.jsonl)",
     )
     
     parser.add_argument(
         "--output",
-        default="../data/outputs/lsm_scores.csv",
-        help="Output CSV with LSM scores (default: ../data/outputs/lsm_scores.csv)",
+        default="data/derived/lsm_scores.csv",
+        help="Output CSV with LSM scores (default: data/derived/lsm_scores.csv)",
     )
     
     return parser.parse_args()
@@ -279,28 +279,11 @@ def main() -> None:
     """Main entry point."""
     args = parse_args()
     
-    base_dir = Path(__file__).resolve().parent
-    input_path = Path(args.input)
-    if not input_path.is_absolute():
-        cwd_candidate = Path.cwd() / input_path
-        repo_candidate = base_dir.parent / input_path
-        if cwd_candidate.exists():
-            input_path = cwd_candidate
-        elif repo_candidate.exists():
-            input_path = repo_candidate
-        else:
-            input_path = base_dir / input_path
-    output_path = Path(args.output)
-    if not output_path.is_absolute():
-        output_path = Path.cwd() / output_path
+    input_path = Path(args.input).resolve()
+    output_path = Path(args.output).resolve()
     
     if not input_path.exists():
-        # Try legacy location
-        legacy_input = base_dir / "../data/conversations_english.jsonl"
-        if legacy_input.exists():
-            input_path = legacy_input
-        else:
-            raise FileNotFoundError(f"Input not found: {input_path}")
+        raise FileNotFoundError(f"Input not found: {input_path}")
     
     # Ensure output directory exists
     output_path.parent.mkdir(parents=True, exist_ok=True)

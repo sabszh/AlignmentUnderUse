@@ -11,9 +11,9 @@ including the topic ID, keywords, and confidence score. Optionally saves a plot
 of the top topics per model.
 
 Usage:
-    python -m analysis.topic_modeling
-    python -m analysis.topic_modeling --input ../data/conversations_english.jsonl --topics 30 --keywords 9
-    python -m analysis.topic_modeling --plot --output-dir topic_model_output
+    python -m src.analysis.topic_modeling
+    python -m src.analysis.topic_modeling --input data/processed/conversations_english.jsonl --topics 30 --keywords 9
+    python -m src.analysis.topic_modeling --plot --output-dir data/outputs/topics
 
 Notes:
 - Turftopic's KeyNMF returns topics as a list of (topic_id, [(word, score), ...]).
@@ -280,13 +280,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--input",
-        default="../data/processed/conversations_english.jsonl",
-        help="Path to input conversations JSONL (default: ../data/processed/conversations_english.jsonl)",
+        default="data/processed/conversations_english.jsonl",
+        help="Path to input conversations JSONL (default: data/processed/conversations_english.jsonl)",
     )
     parser.add_argument(
         "--output-dir",
-        default="../data/outputs/topics",
-        help="Directory to write outputs (CSV/plot). Default: ../data/outputs/topics",
+        default="data/outputs/topics",
+        help="Directory to write outputs (CSV/plot). Default: data/outputs/topics",
     )
     parser.add_argument(
         "--topics",
@@ -317,26 +317,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    base_dir = Path(__file__).resolve().parent
-    input_path = Path(args.input)
-    if not input_path.is_absolute():
-        cwd_candidate = Path.cwd() / input_path
-        repo_candidate = base_dir.parent / input_path
-        if cwd_candidate.exists():
-            input_path = cwd_candidate
-        elif repo_candidate.exists():
-            input_path = repo_candidate
-        else:
-            input_path = base_dir / input_path
-
-    # Fallback to legacy location if missing
-    if not input_path.exists():
-        legacy_input = base_dir / "../data/conversations_english.jsonl"
-        if legacy_input.exists():
-            print(f"[topic_modeling] Input not found; using legacy path: {legacy_input}")
-            input_path = legacy_input
-
-    output_dir = base_dir / args.output_dir
+    input_path = Path(args.input).resolve()
+    output_dir = Path(args.output_dir).resolve()
 
     if KeyNMF is None:
         raise RuntimeError(
