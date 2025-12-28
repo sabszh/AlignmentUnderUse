@@ -280,8 +280,16 @@ def main() -> None:
     args = parse_args()
     
     base_dir = Path(__file__).resolve().parent
-    input_path = base_dir / args.input
-    output_path = base_dir / args.output
+    input_path = Path(args.input)
+    if not input_path.is_absolute():
+        cwd_candidate = Path.cwd() / input_path
+        if cwd_candidate.exists():
+            input_path = cwd_candidate
+        else:
+            input_path = base_dir / input_path
+    output_path = Path(args.output)
+    if not output_path.is_absolute():
+        output_path = Path.cwd() / output_path
     
     if not input_path.exists():
         # Try legacy location
