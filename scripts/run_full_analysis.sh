@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set -o igncr 2>/dev/null || true
 
 INPUT_PATH="${1:-data/processed/conversations_english.jsonl}"
 DERIVED_DIR="${2:-data/derived}"
@@ -39,34 +40,50 @@ if [[ "$VERBOSE" == "true" ]]; then
 fi
 
 echo
-echo "[run_full_analysis] Semantic alignment..."
-python -u -m analysis.semantic_alignment \
-  --input "$INPUT_PATH" \
-  --output "$SEMANTIC_OUT" \
-  --embeddings-cache-dir "$DERIVED_DIR" \
-  --device auto
+if [[ -f "$SEMANTIC_OUT" ]]; then
+  echo "[run_full_analysis] Semantic alignment: skip (exists)"
+else
+  echo "[run_full_analysis] Semantic alignment..."
+  python -u -m analysis.semantic_alignment \
+    --input "$INPUT_PATH" \
+    --output "$SEMANTIC_OUT" \
+    --embeddings-cache-dir "$DERIVED_DIR" \
+    --device auto
+fi
 
 echo
-echo "[run_full_analysis] Sentiment alignment..."
-python -u -m analysis.sentiment_alignment \
-  --input "$SEMANTIC_OUT" \
-  --output "$SENTIMENT_OUT" \
-  --cache-dir "$DERIVED_DIR" \
-  --conversations "$INPUT_PATH" \
-  --device auto
+if [[ -f "$SENTIMENT_OUT" ]]; then
+  echo "[run_full_analysis] Sentiment alignment: skip (exists)"
+else
+  echo "[run_full_analysis] Sentiment alignment..."
+  python -u -m analysis.sentiment_alignment \
+    --input "$SEMANTIC_OUT" \
+    --output "$SENTIMENT_OUT" \
+    --cache-dir "$DERIVED_DIR" \
+    --conversations "$INPUT_PATH" \
+    --device auto
+fi
 
 echo
-echo "[run_full_analysis] LSM scoring..."
-python -u -m analysis.lsm_scoring \
-  --input "$INPUT_PATH" \
-  --output "$LSM_OUT"
+if [[ -f "$LSM_OUT" ]]; then
+  echo "[run_full_analysis] LSM scoring: skip (exists)"
+else
+  echo "[run_full_analysis] LSM scoring..."
+  python -u -m analysis.lsm_scoring \
+    --input "$INPUT_PATH" \
+    --output "$LSM_OUT"
+fi
 
 if [[ "$SKIP_TOPICS" != "true" ]]; then
   echo
-  echo "[run_full_analysis] Topic modeling..."
-  python -u -m analysis.topic_modeling \
-    --input "$INPUT_PATH" \
-    --output-dir "$TOPICS_OUT"
+  if [[ -f "$TOPICS_OUT/conversations_with_topics.csv" ]]; then
+    echo "[run_full_analysis] Topic modeling: skip (exists)"
+  else
+    echo "[run_full_analysis] Topic modeling..."
+    python -u -m analysis.topic_modeling \
+      --input "$INPUT_PATH" \
+      --output-dir "$TOPICS_OUT"
+  fi
 fi
 
 echo
