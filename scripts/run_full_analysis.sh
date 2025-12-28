@@ -18,6 +18,7 @@ SEMANTIC_OUT="$DERIVED_DIR/semantic_alignment.csv"
 SENTIMENT_OUT="$DERIVED_DIR/sentiment_alignment.csv"
 LSM_OUT="$DERIVED_DIR/lsm_scores.csv"
 TOPICS_OUT="$OUTPUTS_DIR/topics"
+ARCHIVE_PATH="$OUTPUTS_DIR/analysis_outputs.zip"
 
 echo "[run_full_analysis] Input: $INPUT_PATH"
 echo "[run_full_analysis] Derived dir: $DERIVED_DIR"
@@ -53,6 +54,10 @@ if [[ "$SKIP_TOPICS" != "true" ]]; then
 fi
 
 echo
+echo "[run_full_analysis] Zipping outputs..."
+zip -r "$ARCHIVE_PATH" "$DERIVED_DIR" "$OUTPUTS_DIR" >/dev/null
+
+echo
 echo "[run_full_analysis] Done."
 echo "  $SEMANTIC_OUT"
 echo "  $SENTIMENT_OUT"
@@ -60,3 +65,4 @@ echo "  $LSM_OUT"
 if [[ "$SKIP_TOPICS" != "true" ]]; then
   echo "  $TOPICS_OUT"
 fi
+echo "  $ARCHIVE_PATH"
