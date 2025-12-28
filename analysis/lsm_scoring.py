@@ -283,8 +283,11 @@ def main() -> None:
     input_path = Path(args.input)
     if not input_path.is_absolute():
         cwd_candidate = Path.cwd() / input_path
+        repo_candidate = base_dir.parent / input_path
         if cwd_candidate.exists():
             input_path = cwd_candidate
+        elif repo_candidate.exists():
+            input_path = repo_candidate
         else:
             input_path = base_dir / input_path
     output_path = Path(args.output)
