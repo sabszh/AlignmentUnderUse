@@ -33,6 +33,7 @@ import pandas as pd
 from transformers import pipeline
 from tqdm.auto import tqdm
 
+from analysis.turn_schema import TURN_SCHEMA
 
 def parse_args():
     """Parse command line arguments."""
@@ -50,6 +51,12 @@ def parse_args():
         "--from-conversations",
         default=None,
         help="Alternatively, load from conversations JSONL and create pairs (skips semantic similarity)",
+    )
+    
+    parser.add_argument(
+        "--conversations",
+        default=None,
+        help="Conversations JSONL used to load message text when input CSV omits text columns",
     )
     
     parser.add_argument(
@@ -128,27 +135,74 @@ def load_from_conversations(conversations_path):
     return df_pairs, df_messages
 
 
-def extract_unique_messages(df_pairs):
+def build_message_text_lookup(conversations_path):
+    """Build message_id -> text lookup from conversations JSONL."""
+    from analysis.semantic_alignment import load_messages
+    
+    df_messages = load_messages(conversations_path)
+    return dict(zip(df_messages["message_id"], df_messages["text"]))
+
+
+def ensure_cross_check_5(df_pairs, message_text_lookup=None):
+    """Ensure user/assistant cross_check_5 columns exist."""
+    if "user_cross_check_5" in df_pairs.columns and "assistant_cross_check_5" in df_pairs.columns:
+        return df_pairs
+
+    if message_text_lookup is None:
+        raise ValueError(
+            "Input CSV does not include cross_check_5. Provide --conversations "
+            "to load text for cross_check_5 reconstruction."
+        )
+
+    df_pairs = df_pairs.copy()
+    if "user_cross_check_5" not in df_pairs.columns:
+        df_pairs["user_cross_check_5"] = df_pairs["user_message_id"].map(
+            lambda mid: (message_text_lookup.get(mid, "")[:5] if isinstance(message_text_lookup.get(mid, ""), str) else "")
+        )
+    if "assistant_cross_check_5" not in df_pairs.columns:
+        df_pairs["assistant_cross_check_5"] = df_pairs["assistant_message_id"].map(
+            lambda mid: (message_text_lookup.get(mid, "")[:5] if isinstance(message_text_lookup.get(mid, ""), str) else "")
+        )
+    return df_pairs
+
+
+def extract_unique_messages(df_pairs, message_text_lookup=None):
     """Extract unique messages from turn pairs.
     
     Args:
         df_pairs: DataFrame with turn pairs
+        message_text_lookup: Optional dict mapping message_id -> text
         
     Returns:
         DataFrame with unique messages (message_id, text)
     """
     # Combine user and assistant messages
-    user_msgs = df_pairs[['user_message_id', 'user_text']].rename(
-        columns={'user_message_id': 'message_id', 'user_text': 'text'}
-    )
-    assistant_msgs = df_pairs[['assistant_message_id', 'assistant_text']].rename(
-        columns={'assistant_message_id': 'message_id', 'assistant_text': 'text'}
-    )
+    if "user_text" in df_pairs.columns and "assistant_text" in df_pairs.columns:
+        user_msgs = df_pairs[['user_message_id', 'user_text', 'user_cross_check_5']].rename(
+            columns={'user_message_id': 'message_id', 'user_text': 'text', 'user_cross_check_5': 'cross_check_5'}
+        )
+        assistant_msgs = df_pairs[['assistant_message_id', 'assistant_text', 'assistant_cross_check_5']].rename(
+            columns={'assistant_message_id': 'message_id', 'assistant_text': 'text', 'assistant_cross_check_5': 'cross_check_5'}
+        )
+    else:
+        if message_text_lookup is None:
+            raise ValueError(
+                "Input CSV does not include message text. Provide --conversations "
+                "to load text for sentiment computation."
+            )
+        user_msgs = df_pairs[['user_message_id', 'user_cross_check_5']].rename(
+            columns={'user_message_id': 'message_id', 'user_cross_check_5': 'cross_check_5'}
+        )
+        user_msgs["text"] = user_msgs["message_id"].map(message_text_lookup)
+        assistant_msgs = df_pairs[['assistant_message_id', 'assistant_cross_check_5']].rename(
+            columns={'assistant_message_id': 'message_id', 'assistant_cross_check_5': 'cross_check_5'}
+        )
+        assistant_msgs["text"] = assistant_msgs["message_id"].map(message_text_lookup)
     
     df_unique = pd.concat([user_msgs, assistant_msgs]).drop_duplicates('message_id')
-    
+
     print(f"\n[sentiment_alignment] Extracted {len(df_unique):,} unique messages")
-    
+
     return df_unique
 
 
@@ -300,8 +354,14 @@ def main():
         input_path = Path(args.input).resolve()
         df_pairs = load_turn_pairs(input_path)
     
+    message_text_lookup = None
+    if args.conversations:
+        message_text_lookup = build_message_text_lookup(Path(args.conversations).resolve())
+    
+    df_pairs = ensure_cross_check_5(df_pairs, message_text_lookup=message_text_lookup)
+    
     # Extract unique messages
-    df_unique = extract_unique_messages(df_pairs)
+    df_unique = extract_unique_messages(df_pairs, message_text_lookup=message_text_lookup)
     
     # Compute sentiment
     sentiment_dict = compute_sentiment(
@@ -315,7 +375,11 @@ def main():
     
     # Compute sentiment similarity
     df_pairs = compute_sentiment_similarity(df_pairs, sentiment_dict)
+    df_pairs = df_pairs.drop(columns=["user_text", "assistant_text"], errors="ignore")
     
+    output_cols = TURN_SCHEMA + ["user_sentiment", "assistant_sentiment", "sentiment_similarity"]
+    df_pairs = df_pairs[output_cols]
+
     # Save results
     print(f"\n[sentiment_alignment] Saving results to: {output_path}")
     df_pairs.to_csv(output_path, index=False)

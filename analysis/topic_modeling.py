@@ -117,11 +117,7 @@ def build_conversation_doc(messages: Any, mode: str = "user_only") -> str:
     return "\n".join(parts).strip()
 
 
-# ---------------------------
-# Topic helpers
-# ---------------------------
-
-def get_topic_keywords(model: KeyNMF, tid: int, n: int) -> List[str]:
+def get_topic_keywords(model: "KeyNMF", tid: int, n: int) -> List[str]:
     """Extract top n keywords for a topic from KeyNMF model."""
     try:
         topics = model.get_topics()  # list of (topic_id, [(word, score), ...])
@@ -136,7 +132,7 @@ def get_topic_keywords(model: KeyNMF, tid: int, n: int) -> List[str]:
         return []
 
 
-def build_topic_keyword_map(model: KeyNMF, n_topics: int, n_keywords: int) -> Dict[int, str]:
+def build_topic_keyword_map(model: "KeyNMF", n_topics: int, n_keywords: int) -> Dict[int, str]:
     """Build mapping of topic IDs to a display string of keywords."""
     topic_kw_map: Dict[int, str] = {}
     for tid in range(n_topics):
@@ -145,7 +141,7 @@ def build_topic_keyword_map(model: KeyNMF, n_topics: int, n_keywords: int) -> Di
     return topic_kw_map
 
 
-def assign_topics(doc_topic_matrix: np.ndarray, model: KeyNMF, prefix: str, n_topics: int, n_keywords: int) -> pd.DataFrame:
+def assign_topics(doc_topic_matrix: np.ndarray, model: "KeyNMF", prefix: str, n_topics: int, n_keywords: int) -> pd.DataFrame:
     """Assign dominant topic + keywords for each conversation for a given model."""
     topic_ids = doc_topic_matrix.argmax(axis=1).astype(int)
     topic_scores = doc_topic_matrix.max(axis=1).astype(float)
@@ -224,9 +220,12 @@ def run_pipeline(input_path: Path, output_dir: Path, n_topics: int, n_keywords: 
     df_assistant_topics = assign_topics(np.asarray(doc_topic_assistant), model_assistant, "assistant", n_topics, n_keywords)
     df_combined_topics = assign_topics(np.asarray(doc_topic_combined), model_combined, "combined", n_topics, n_keywords)
 
-    # Merge and save
+    # Add cross_check_5 columns for user/assistant/combined docs
     df_final = df_docs[["conv_id"]].copy()
     df_final = pd.concat([df_final, df_user_topics, df_assistant_topics, df_combined_topics], axis=1)
+    df_final["user_cross_check_5"] = df_docs["doc_user"].astype(str).str[:5]
+    df_final["assistant_cross_check_5"] = df_docs["doc_assistant"].astype(str).str[:5]
+    df_final["combined_cross_check_5"] = df_docs["doc_combined"].astype(str).str[:5]
     csv_dir = output_dir
     csv_dir.mkdir(parents=True, exist_ok=True)
     csv_path = csv_dir / "conversations_with_topics.csv"

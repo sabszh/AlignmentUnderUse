@@ -2,9 +2,10 @@
 Linguistic Style Matching (LSM) computation script.
 
 Loads conversations and computes LSM (Linguistic Style Matching) scores between
-sequential user-assistant message pairs. Outputs a simple dataset with:
+sequential user-assistant message pairs in both directions. Outputs a dataset
+with:
 - conv_id: conversation identifier
-- turn: sequential turn number (pair_step) within conversation
+- turn: signed turn index (user→assistant pairs are 1,2,...; assistant→user pairs are -1,-2,...)
 - lsm_score: overall LSM score for that turn pair
 
 LSM measures linguistic style similarity across functional word categories:
@@ -25,6 +26,7 @@ from typing import Any, Dict, List
 import numpy as np
 import pandas as pd
 
+from analysis.turn_schema import TURN_SCHEMA
 
 # --- Configuration ---
 
@@ -156,7 +158,7 @@ def explode_messages(df: pd.DataFrame) -> pd.DataFrame:
         msgs = row.get("messages", [])
         if not isinstance(msgs, list):
             continue
-        
+
         for mi, msg in enumerate(msgs):
             if not isinstance(msg, dict):
                 continue
@@ -167,21 +169,23 @@ def explode_messages(df: pd.DataFrame) -> pd.DataFrame:
                     "conv_id": conv_id,
                     "msg_idx": mi,
                     "role": role,
-                    "text": text
+                    "text": text,
+                    "cross_check_5": str(text)[:5],
+                    "message_id": f"{conv_id}_{mi}_{role}",
                 })
-    
+
     if not rows:
         return pd.DataFrame()
-    
+
     return pd.DataFrame(rows).sort_values(["conv_id", "msg_idx"]).reset_index(drop=True)
 
 
 def compute_lsm(df_conv: pd.DataFrame) -> pd.DataFrame:
-    """Compute LSM scores for all turn pairs in conversations."""
+    """Compute LSM scores for all turn pairs in conversations (both directions)."""
     df_msgs = explode_messages(df_conv)
     
     if df_msgs.empty:
-        return pd.DataFrame(columns=["conv_id", "turn", "lsm_score"])
+        return pd.DataFrame(columns=TURN_SCHEMA + ["lsm_score"])
     
     # Compute functional word proportions
     fw_df = df_msgs["text"].apply(fw_proportions).apply(pd.Series)
@@ -191,7 +195,8 @@ def compute_lsm(df_conv: pd.DataFrame) -> pd.DataFrame:
     pair_rows = []
     for conv_id, g in df_msgs_fw.groupby("conv_id", sort=False):
         g = g.sort_values("msg_idx").reset_index(drop=True)
-        turn = 0
+        user_turn = 0
+        asst_turn = 0
         
         for i in range(1, len(g)):
             r_prev, r_now = g.loc[i - 1, "role"], g.loc[i, "role"]
@@ -200,7 +205,21 @@ def compute_lsm(df_conv: pd.DataFrame) -> pd.DataFrame:
             if r_prev == r_now:
                 continue
             
-            turn += 1
+            if r_prev == "user" and r_now == "assistant":
+                user_turn += 1
+                turn_idx = user_turn
+                direction = "user→assistant"
+                user_row = g.loc[i - 1]
+                assistant_row = g.loc[i]
+            elif r_prev == "assistant" and r_now == "user":
+                asst_turn += 1
+                turn_idx = -asst_turn
+                direction = "assistant→user"
+                user_row = g.loc[i]
+                assistant_row = g.loc[i - 1]
+            else:
+                # Unexpected role token, skip
+                continue
             
             # Compute LSM for this pair
             cat_scores = []
@@ -212,14 +231,25 @@ def compute_lsm(df_conv: pd.DataFrame) -> pd.DataFrame:
             
             pair_rows.append({
                 "conv_id": conv_id,
-                "turn": turn,
+                "turn": turn_idx,
+                "direction": direction,
+                "user_message_id": user_row["message_id"],
+                "assistant_message_id": assistant_row["message_id"],
+                "user_cross_check_5": user_row["cross_check_5"],
+                "assistant_cross_check_5": assistant_row["cross_check_5"],
                 "lsm_score": lsm,
             })
     
     if not pair_rows:
-        return pd.DataFrame(columns=["conv_id", "turn", "lsm_score"])
+        return pd.DataFrame(columns=TURN_SCHEMA + ["lsm_score"])
     
-    return pd.DataFrame(pair_rows)
+    df_pairs = pd.DataFrame(pair_rows)
+    schema_cols = [c for c in TURN_SCHEMA if c in df_pairs.columns]
+    ordered = schema_cols[:]
+    if "lsm_score" in df_pairs.columns:
+        ordered.append("lsm_score")
+    ordered.extend([c for c in df_pairs.columns if c not in ordered])
+    return df_pairs[ordered]
 
 
 # --- Main ---

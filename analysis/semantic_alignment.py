@@ -33,6 +33,8 @@ import numpy as np
 import pandas as pd
 from sentence_transformers import SentenceTransformer
 
+from analysis.turn_schema import TURN_SCHEMA
+
 
 def parse_args():
     """Parse command line arguments."""
@@ -109,6 +111,7 @@ def load_messages(input_path):
                 
             obj = json.loads(line)
             share_id = obj.get('share_id')
+            conv_id = share_id
             
             # Conversation-level metadata
             conversation_language = obj.get('conversation_language')
@@ -154,6 +157,7 @@ def load_messages(input_path):
                     continue
                 
                 row = {
+                    'conv_id': conv_id,
                     'share_id': share_id,
                     'conversation_title': conversation_title,
                     'conversation_create_time': conversation_create_time,
@@ -173,7 +177,7 @@ def load_messages(input_path):
     df_messages = df_messages.dropna(subset=['share_id', 'backend_index', 'text'])
     
     # Create unique message identifiers
-    df_messages['message_id'] = (df_messages['share_id'] + '_' + 
+    df_messages['message_id'] = (df_messages['conv_id'] + '_' + 
                                  df_messages['backend_index'].astype(str) + '_' + 
                                  df_messages['role'])
     
@@ -190,8 +194,8 @@ def create_turn_pairs(df_messages):
         
     Returns:
         DataFrame with turn pairs, containing:
-        - share_id, direction (user_to_assistant or assistant_to_user)
-        - turn_index, user_text, assistant_text
+        - conv_id, direction (user→assistant or assistant→user)
+        - turn (signed turn index, LSM-style)
         - user_message_id, assistant_message_id
         - conversation metadata
     """
@@ -204,45 +208,48 @@ def create_turn_pairs(df_messages):
         'conversation_language', 'default_model_slug', 'subreddits'
     ] + [c for c in df_messages.columns if c.startswith('struct_')]
     
-    for share_id, group in df_messages.groupby('share_id'):
+    for conv_id, group in df_messages.groupby('conv_id'):
         group_sorted = group.sort_values('backend_index', kind='mergesort')
         rows = group_sorted.to_dict('records')
-        ua_turn_index = 0
-        au_turn_index = 0
-        
+        user_turn = 0
+        assistant_turn = 0
         for i in range(len(rows) - 1):
             current_role = rows[i]['role']
             next_role = rows[i + 1]['role']
-            
             if current_role == 'user' and next_role == 'assistant':
-                ua_turn_index += 1
+                user_turn += 1
                 assistant_model_slug = rows[i + 1].get('message_model_slug') or rows[i + 1].get('default_model_slug')
                 pair = {
-                    'share_id': share_id,
-                    'direction': 'user_to_assistant',
-                    'turn_index': ua_turn_index,
+                    'conv_id': conv_id,
+                    'direction': 'user→assistant',
+                    'turn': user_turn,
                     'assistant_model_slug': assistant_model_slug,
                     'user_text': rows[i]['text'],
                     'assistant_text': rows[i + 1]['text'],
                     'user_message_id': rows[i]['message_id'],
-                    'assistant_message_id': rows[i + 1]['message_id']
+                    'assistant_message_id': rows[i + 1]['message_id'],
+                    # Add cross_check_5 columns
+                    'user_cross_check_5': (rows[i]['text'][:5] if isinstance(rows[i]['text'], str) else ''),
+                    'assistant_cross_check_5': (rows[i + 1]['text'][:5] if isinstance(rows[i + 1]['text'], str) else ''),
                 }
                 for col in metadata_cols:
                     pair[col] = rows[i].get(col)
                 pairs.append(pair)
-                
             elif current_role == 'assistant' and next_role == 'user':
-                au_turn_index += 1
+                assistant_turn += 1
                 assistant_model_slug = rows[i].get('message_model_slug') or rows[i].get('default_model_slug')
                 pair = {
-                    'share_id': share_id,
-                    'direction': 'assistant_to_user',
-                    'turn_index': au_turn_index,
+                    'conv_id': conv_id,
+                    'direction': 'assistant→user',
+                    'turn': -assistant_turn,
                     'assistant_model_slug': assistant_model_slug,
                     'user_text': rows[i + 1]['text'],
                     'assistant_text': rows[i]['text'],
                     'user_message_id': rows[i + 1]['message_id'],
-                    'assistant_message_id': rows[i]['message_id']
+                    'assistant_message_id': rows[i]['message_id'],
+                    # Add cross_check_5 columns
+                    'user_cross_check_5': (rows[i + 1]['text'][:5] if isinstance(rows[i + 1]['text'], str) else ''),
+                    'assistant_cross_check_5': (rows[i]['text'][:5] if isinstance(rows[i]['text'], str) else ''),
                 }
                 for col in metadata_cols:
                     pair[col] = rows[i].get(col)
@@ -251,8 +258,8 @@ def create_turn_pairs(df_messages):
     df_pairs = pd.DataFrame(pairs)
     
     print(f"  Created {len(df_pairs):,} turn pairs")
-    print(f"    user→assistant: {(df_pairs['direction'] == 'user_to_assistant').sum():,}")
-    print(f"    assistant→user: {(df_pairs['direction'] == 'assistant_to_user').sum():,}")
+    print(f"    user→assistant: {(df_pairs['direction'] == 'user→assistant').sum():,}")
+    print(f"    assistant→user: {(df_pairs['direction'] == 'assistant→user').sum():,}")
     
     return df_pairs
 
@@ -276,11 +283,13 @@ def compute_embeddings(df_messages, model_name, device, batch_size, cache_dir, f
     
     message_emb_path = cache_path / "message_embeddings.npy"
     message_ids_path = cache_path / "message_ids.npy"
+    message_cc5_path = cache_path / "message_cross_check_5.npy"
     
     # Get unique messages
     df_unique = df_messages[['message_id', 'text']].drop_duplicates('message_id')
     unique_message_ids = df_unique['message_id'].values
     unique_texts = df_unique['text'].tolist()
+    message_cross_check_5 = [t[:5] if isinstance(t, str) else "" for t in unique_texts]
     
     print(f"\n[semantic_alignment] Computing embeddings for {len(unique_texts):,} unique messages")
     print(f"  Model: {model_name}")
@@ -335,11 +344,13 @@ def compute_embeddings(df_messages, model_name, device, batch_size, cache_dir, f
         # Save checkpoint
         np.save(message_emb_path, message_embeddings)
         np.save(message_ids_path, unique_message_ids)
+        np.save(message_cc5_path, np.array(message_cross_check_5, dtype=object))
         
         if (i + batch_size) % (batch_size * 10) == 0 or i + batch_size >= len(unique_texts):
             print(f"    Processed {min(i + batch_size, len(unique_texts)):,} / {len(unique_texts):,}")
     
     print(f"  ✓ Saved embeddings to: {message_emb_path}")
+    print(f"  ✓ Saved cross_check_5 to: {message_cc5_path}")
     
     return message_embeddings, unique_message_ids
 
@@ -414,6 +425,10 @@ def main():
     
     # Compute similarity
     df_pairs = compute_similarity(df_pairs, message_embeddings, message_ids)
+    df_pairs = df_pairs.drop(columns=["user_text", "assistant_text"], errors="ignore")
+
+    output_cols = TURN_SCHEMA + ["semantic_similarity"]
+    df_pairs = df_pairs[output_cols]
     
     # Save results
     print(f"\n[semantic_alignment] Saving results to: {output_path}")
