@@ -80,9 +80,17 @@ if [[ "$SKIP_TOPICS" != "true" ]]; then
     echo "[run_full_analysis] Topic modeling: skip (exists)"
   else
     echo "[run_full_analysis] Topic modeling..."
-    python -u -m analysis.topic_modeling \
-      --input "$INPUT_PATH" \
-      --output-dir "$TOPICS_OUT"
+    if python - <<'PY'
+from analysis.topic_modeling import KeyNMF
+raise SystemExit(0 if KeyNMF is not None else 1)
+PY
+    then
+      python -u -m analysis.topic_modeling \
+        --input "$INPUT_PATH" \
+        --output-dir "$TOPICS_OUT"
+    else
+      echo "[run_full_analysis] Topic modeling: skip (turftopic import failed)"
+    fi
   fi
 fi
 

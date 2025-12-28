@@ -167,7 +167,7 @@ def run_pipeline(input_path: Path, output_dir: Path, n_topics: int, n_keywords: 
         raise RuntimeError(f"turftopic import failed: {_IMPORT_ERR}")
 
     # Load conversations
-    df_english = pd.read_json(str(input_path), lines=True)
+    df_english = pd.read_json(input_path, lines=True)
     if "conv_id" not in df_english.columns:
         if "share_id" in df_english.columns:
             df_english["conv_id"] = df_english["share_id"]
