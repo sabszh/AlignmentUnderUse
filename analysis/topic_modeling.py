@@ -166,6 +166,9 @@ def run_pipeline(input_path: Path, output_dir: Path, n_topics: int, n_keywords: 
     if KeyNMF is None:
         raise RuntimeError(f"turftopic import failed: {_IMPORT_ERR}")
 
+    if not input_path.exists():
+        raise FileNotFoundError(f"Input not found: {input_path}")
+
     # Load conversations
     df_english = pd.read_json(input_path, lines=True)
     if "conv_id" not in df_english.columns:
@@ -315,7 +318,17 @@ def main() -> None:
     args = parse_args()
 
     base_dir = Path(__file__).resolve().parent
-    input_path = base_dir / args.input
+    input_path = Path(args.input)
+    if not input_path.is_absolute():
+        cwd_candidate = Path.cwd() / input_path
+        repo_candidate = base_dir.parent / input_path
+        if cwd_candidate.exists():
+            input_path = cwd_candidate
+        elif repo_candidate.exists():
+            input_path = repo_candidate
+        else:
+            input_path = base_dir / input_path
+
     # Fallback to legacy location if missing
     if not input_path.exists():
         legacy_input = base_dir / "../data/conversations_english.jsonl"
