@@ -27,18 +27,12 @@ from tqdm.auto import tqdm
 
 from ..schemas.turn import TURN_SCHEMA
 
-
-# --- spaCy device selection ---
 import os
-try:
-    gpu_enabled = spacy.prefer_gpu()
-    if gpu_enabled:
-        print("[lexsyn_alignment] Using spaCy GPU mode.")
-    else:
-        print("[lexsyn_alignment] Using spaCy CPU mode.")
-except Exception as e:
-    print(f"[lexsyn_alignment] spaCy GPU check failed, using CPU. Reason: {e}")
-    gpu_enabled = False
+# Use GPU if available and requested
+if spacy.prefer_gpu():
+    print("[lexsyn_alignment] Using spaCy GPU mode.")
+else:
+    print("[lexsyn_alignment] Using spaCy CPU mode.")
 nlp = spacy.load("en_core_web_sm")
 
 # --- Parsing helpers ---
@@ -69,10 +63,10 @@ def lexical_jaccard(u_text: str, a_text: str) -> float:
 # Batch POS tagging for speed
 def batch_pos_jaccard(user_texts, assistant_texts):
     # Use spaCy's nlp.pipe for batch processing
-    user_docs = list(nlp.pipe(user_texts, batch_size=128, disable=["ner"]))
-    assistant_docs = list(nlp.pipe(assistant_texts, batch_size=128, disable=["ner"]))
+    user_docs = list(tqdm(nlp.pipe(user_texts, batch_size=128, disable=["ner"]), total=len(user_texts), desc="spaCy user POS"))
+    assistant_docs = list(tqdm(nlp.pipe(assistant_texts, batch_size=128, disable=["ner"]), total=len(assistant_texts), desc="spaCy assistant POS"))
     pos_jaccards = []
-    for u_doc, a_doc in zip(user_docs, assistant_docs):
+    for idx, (u_doc, a_doc) in enumerate(tqdm(zip(user_docs, assistant_docs), total=len(user_docs), desc="POS Jaccard")):
         u_pos = set([token.pos_ for token in u_doc])
         a_pos = set([token.pos_ for token in a_doc])
         if not u_pos and not a_pos:
@@ -149,19 +143,44 @@ def create_turn_pairs(df_msgs: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     return pd.DataFrame(pairs)
 
+def compute_alignment(df_pairs: pd.DataFrame) -> pd.DataFrame:
 # --- Alignment computation ---
     print("[lexsyn_alignment] Computing lexical and syntactic alignment...")
     df_pairs = df_pairs.copy()
     # Lexical Jaccard with tqdm
-    df_pairs["lexical_jaccard"] = [
-        lexical_jaccard(u, a) for u, a in tqdm(zip(df_pairs["user_text"], df_pairs["assistant_text"]),
-                                              total=len(df_pairs), desc="Lexical Jaccard")
-    ]
-    # Syntactic Jaccard (POS) with tqdm and batch spaCy
-    df_pairs["pos_jaccard"] = batch_pos_jaccard(
-        list(tqdm(df_pairs["user_text"], desc="spaCy user_text", total=len(df_pairs))),
-        list(tqdm(df_pairs["assistant_text"], desc="spaCy assistant_text", total=len(df_pairs)))
-    )
+    # Lexical Jaccard with tqdm and periodic saving
+    lexical_scores = []
+    save_every = 5000
+    for idx, (u, a) in enumerate(tqdm(zip(df_pairs["user_text"], df_pairs["assistant_text"]), total=len(df_pairs), desc="Lexical Jaccard")):
+        lexical_scores.append(lexical_jaccard(u, a))
+        if (idx + 1) % save_every == 0:
+            df_pairs.loc[:idx, "lexical_jaccard"] = lexical_scores
+            partial = df_pairs.loc[:idx, ["conv_id", "turn", "direction", "user_message_id", "assistant_message_id", "lexical_jaccard"]]
+            partial.to_csv("data/derived/lexsyn_alignment_partial.csv", index=False)
+    df_pairs["lexical_jaccard"] = lexical_scores
+    partial = df_pairs[["conv_id", "turn", "direction", "user_message_id", "assistant_message_id", "lexical_jaccard"]]
+    partial.to_csv("data/derived/lexsyn_alignment_partial.csv", index=False)
+
+    # Syntactic Jaccard (POS) with tqdm and periodic saving
+    pos_scores = []
+    user_texts = list(df_pairs["user_text"])
+    assistant_texts = list(df_pairs["assistant_text"])
+    user_docs = list(tqdm(nlp.pipe(user_texts, batch_size=128, disable=["ner"]), total=len(user_texts), desc="spaCy user POS"))
+    assistant_docs = list(tqdm(nlp.pipe(assistant_texts, batch_size=128, disable=["ner"]), total=len(assistant_texts), desc="spaCy assistant POS"))
+    for idx, (u_doc, a_doc) in enumerate(tqdm(zip(user_docs, assistant_docs), total=len(user_docs), desc="POS Jaccard")):
+        u_pos = set([token.pos_ for token in u_doc])
+        a_pos = set([token.pos_ for token in a_doc])
+        if not u_pos and not a_pos:
+            pos_scores.append(np.nan)
+        else:
+            pos_scores.append(len(u_pos & a_pos) / len(u_pos | a_pos))
+        if (idx + 1) % save_every == 0:
+            df_pairs.loc[:idx, "pos_jaccard"] = pos_scores
+            partial = df_pairs.loc[:idx, ["conv_id", "turn", "direction", "user_message_id", "assistant_message_id", "lexical_jaccard", "pos_jaccard"]]
+            partial.to_csv("data/derived/lexsyn_alignment_partial.csv", index=False)
+    df_pairs["pos_jaccard"] = pos_scores
+    partial = df_pairs[["conv_id", "turn", "direction", "user_message_id", "assistant_message_id", "lexical_jaccard", "pos_jaccard"]]
+    partial.to_csv("data/derived/lexsyn_alignment_partial.csv", index=False)
     print("  ✓ Computed alignment for", len(df_pairs), "pairs")
     return df_pairs
 

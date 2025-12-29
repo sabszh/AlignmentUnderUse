@@ -3,21 +3,24 @@ Script to merge conversation, LSM, sentiment, semantic, and topics data for down
 
 This script loads turn-level and conversation-level data, merges them into a single DataFrame, drops redundant columns, and saves the result as a CSV.
 
+
 Arguments:
     --conv      Path to the conversations JSONL file (required)
     --lsm       Path to the LSM scores CSV file (required)
     --sentiment Path to the sentiment alignment CSV file (required)
     --semantic  Path to the semantic alignment CSV file (required)
+    --lexsyn    Path to the lexical/syntactic alignment CSV file (required)
     --topics    Path to the topics CSV file (required)
     --output    Path to the output merged CSV file (required)
 
 Example usage:
-    python -m src.analysis.merge_all \
+    python -m src.alignment.merge_all \
         --conv data/processed/conversations_english.jsonl \
         --lsm data/derived/lsm_scores.csv \
         --sentiment data/derived/sentiment_alignment.csv \
         --semantic data/derived/semantic_alignment.csv \
-        --topics data/outputs/topics/conversations_with_topics.csv \
+        --lexsyn data/derived/lexsyn_alignment.csv \
+        --topics data/outputs/conversations_with_topics.csv \
         --output data/outputs/merged.csv
 
 The script expects the turn structure and cross-check logic to match between the sources for correct merging.
@@ -125,10 +128,12 @@ def main():
                         help='Path to sentiment alignment CSV file (default: data/derived/sentiment_alignment.csv)')
     parser.add_argument('--semantic', metavar='PATH', default='data/derived/semantic_alignment.csv',
                         help='Path to semantic alignment CSV file (default: data/derived/semantic_alignment.csv)')
-    parser.add_argument('--topics', metavar='PATH', default='data/outputs/topics/conversations_with_topics.csv',
-                        help='Path to topics CSV file (default: data/outputs/topics/conversations_with_topics.csv)')
+    parser.add_argument('--topics', metavar='PATH', default='data/outputs/conversations_with_topics.csv',
+                        help='Path to topics CSV file (default: data/outputs/conversations_with_topics.csv)')
     parser.add_argument('--output', metavar='PATH', default='data/outputs/merged.csv',
                         help='Path to output merged CSV file (default: data/outputs/merged.csv)')
+    parser.add_argument('--lexsyn', metavar='PATH', default='data/derived/lexsyn_alignment.csv',
+                        help='Path to lexical/syntactic alignment CSV file (default: data/derived/lexsyn_alignment.csv)')
     args = parser.parse_args()
 
     print('Loading conv_df...')
@@ -143,6 +148,8 @@ def main():
     semantic = pd.read_csv(args.semantic)
     print('Loading topics...')
     topics = pd.read_csv(args.topics)
+    print('Loading lexsyn_alignment...')
+    lexsyn = pd.read_csv(args.lexsyn)
 
     merge_keys = ['conv_id', 'turn', 'user_cross_check_5', 'assistant_cross_check_5']
     merged = pd.merge(conv_df, lsm_scores, on=merge_keys, how='left', suffixes=('', '_lsm'))
@@ -154,6 +161,10 @@ def main():
         merged = pd.merge(merged, semantic, on=merge_keys, how='left', suffixes=('', '_semantic'))
     else:
         merged = pd.merge(merged, semantic, on=['conv_id', 'turn'], how='left', suffixes=('', '_semantic'))
+    if set(merge_keys).issubset(lexsyn.columns):
+        merged = pd.merge(merged, lexsyn, on=merge_keys, how='left', suffixes=('', '_lexsyn'))
+    else:
+        merged = pd.merge(merged, lexsyn, on=['conv_id', 'turn'], how='left', suffixes=('', '_lexsyn'))
     if 'conv_id' in topics.columns:
         merged = pd.merge(merged, topics, on='conv_id', how='left', suffixes=('', '_topics'))
     elif 'share_id' in topics.columns:
