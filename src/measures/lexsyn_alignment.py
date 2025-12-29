@@ -27,12 +27,18 @@ from tqdm.auto import tqdm
 
 from ..schemas.turn import TURN_SCHEMA
 
+
+# --- spaCy device selection ---
 import os
-# Use GPU if available and requested
-if spacy.prefer_gpu():
-    print("[lexsyn_alignment] Using spaCy GPU mode.")
-else:
-    print("[lexsyn_alignment] Using spaCy CPU mode.")
+try:
+    gpu_enabled = spacy.prefer_gpu()
+    if gpu_enabled:
+        print("[lexsyn_alignment] Using spaCy GPU mode.")
+    else:
+        print("[lexsyn_alignment] Using spaCy CPU mode.")
+except Exception as e:
+    print(f"[lexsyn_alignment] spaCy GPU check failed, using CPU. Reason: {e}")
+    gpu_enabled = False
 nlp = spacy.load("en_core_web_sm")
 
 # --- Parsing helpers ---
