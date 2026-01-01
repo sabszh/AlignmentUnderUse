@@ -1,0 +1,216 @@
+---
+title: "Bayesian Alignment Analysis (Direction + Turn Dynamics)"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    theme: readable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## 0) Packages & settings
+
+```{r}
+pacman::p_load(
+  brms,
+  cmdstanr,
+  tidyverse,
+  readr,
+  tidybayes,
+  posterior,
+  ggdist,
+  ggridges,
+  pheatmap,
+  bayesplot
+)
+
+# Use cmdstanr if available
+# Use cmdstanr if available
+if (requireNamespace("cmdstanr", quietly = TRUE) &&
+    !is.na(cmdstanr::cmdstan_version(error_on_NA = FALSE))) {
+  message("✅ Using CmdStan backend")
+  backend_to_use <- "cmdstanr"
+} else {
+  message("⚠️ CmdStan not available, falling back to rstan")
+  backend_to_use <- "rstan"
+}
+
+
+options(mc.cores = parallel::detectCores())
+set.seed(123)
+
+metrics_list <- c(
+  "lexical_jaccard",
+  "pos_jaccard",
+  "lsm_score",
+  "semantic_similarity",
+  "sentiment_similarity"
+)
+```
+
+## 1) Load + clean + filter
+
+```{r}
+# Adjust path relative to this Rmd
+df <- read_csv("../../data/outputs/merged.csv", show_col_types = FALSE)
+
+# Keep only rows with required fields
+df_clean <- df %>%
+  drop_na(all_of(metrics_list), combined_topic_id, direction, turn, conv_id, combined_keywords) %>%
+  mutate(
+    abs_turn = abs(turn),
+    direction = as.factor(direction),
+    conv_id = as.factor(conv_id)
+  )
+
+# Filter A: conversation length outliers
+conv_stats <- df_clean %>%
+  group_by(conv_id) %>%
+  summarise(n_turns = n(), .groups = "drop")
+
+len_95 <- quantile(conv_stats$n_turns, 0.95, na.rm = TRUE)
+
+valid_conv_ids <- conv_stats %>%
+  filter(n_turns >= 2, n_turns <= len_95) %>%
+  pull(conv_id)
+
+df_filtered <- df_clean %>%
+  filter(conv_id %in% valid_conv_ids)
+
+# Filter B: turn support (by abs_turn)
+turn_stats <- df_filtered %>%
+  group_by(abs_turn) %>%
+  summarise(n_convs = n_distinct(conv_id), .groups = "drop")
+
+valid_turns <- turn_stats %>%
+  filter(n_convs >= 200) %>%
+  pull(abs_turn)
+
+df_filtered <- df_filtered %>%
+  filter(abs_turn %in% valid_turns)
+
+cat("Final N rows:", nrow(df_filtered), "\n")
+cat("N conversations:", n_distinct(df_filtered$conv_id), "\n")
+cat("Turn range:", min(df_filtered$abs_turn), "to", max(df_filtered$abs_turn), "\n")
+```
+
+## 2) Topic labels
+
+```{r}
+topic_info <- df_filtered %>%
+  group_by(combined_topic_id) %>%
+  summarise(
+    raw_keywords = first(combined_keywords),
+    n_convs = n_distinct(conv_id),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    clean_keywords = map_chr(str_split(raw_keywords, " / "),
+                             ~ paste(.x[1:min(2, length(.x))], collapse = ", ")),
+    topic_label = paste0(clean_keywords, " (n=", n_convs, ")"),
+    topic_label = as.factor(topic_label)
+  )
+
+df_final <- df_filtered %>%
+  left_join(topic_info %>% select(combined_topic_id, topic_label),
+            by = "combined_topic_id")
+```
+
+## 3) Z-scoring
+```{r}
+df_long <- df_final %>%
+  pivot_longer(all_of(metrics_list), names_to = "metric", values_to = "value")
+
+df_long <- df_long %>%
+  group_by(metric) %>%
+  mutate(z = as.numeric(scale(value))) %>%
+  ungroup()
+```
+
+
+```{r}
+## 4) Frequentist mixed GAM (mgcv)
+
+pacman::p_load(
+  mgcv,
+  gratia   # nice plotting + smooth diagnostics
+)
+
+```
+
+```{r}
+## Example: lexical_jaccard only
+d <- df_long %>% filter(metric == "lexical_jaccard")
+
+
+fit_gam <- gam(
+  z ~ 0 + topic_label * direction +
+    s(abs_turn, k = 10) +
+    s(conv_id, bs = "re"),
+  data = d,
+  method = "REML",
+  control = gam.control(trace = TRUE)
+)
+```
+
+```{r}
+gam_fits <- list()
+
+for (m in unique(df_long$metric)) {
+
+  cat("\n==============================\n")
+  cat("FITTING GAM FOR:", m, "\n")
+
+  d <- df_long %>% filter(metric == m)
+
+  gam_fits[[m]] <- gam(
+    z ~ 0 + topic_label * direction +
+      s(abs_turn, k = 10) +
+      s(conv_id, bs = "re"),
+    data = d,
+    method = "REML",
+    control = gam.control(trace = TRUE)
+  )
+  print(summary(gam_fits[[m]]))
+}
+
+```
+
+```{r}
+## Turn smooth
+draw(fit_gam) +
+  labs(title = "Smooth effect of conversation position",
+       x = "|turn|",
+       y = "Partial effect on alignment (z)")
+```
+
+```{r}
+plot(fit_gam, select = 1, shade = TRUE)
+```
+
+```{r}
+library(broom)
+
+tidy(fit_gam, parametric = TRUE) %>%
+  filter(str_detect(term, "topic_label")) %>%
+  arrange(estimate)
+
+```
+
+```{r}
+fit_gam_dir <- gam(
+  z ~ 0 + topic_label * direction +
+    s(abs_turn, by = direction, k = 10) +
+    s(conv_id, bs = "re"),
+  data = d,
+  method = "REML"
+)
+
+draw(fit_gam_dir)
+
+```
+
+

@@ -46,6 +46,7 @@ src/alignment/.RData
 src/alignment/*.csv
 
 
+
 # Testing directories (experimental code and notebooks)
 data_collection/testing/
 analysis/testing/
