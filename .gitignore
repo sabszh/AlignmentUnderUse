@@ -40,11 +40,10 @@ data/**
 !data/outputs/topics/
 .bin/*
 
-# Analysis outputs and notebooks
-analysis/data/*.jsonl
-analysis/*.html
-analysis/*.png
-analysis/*.pdf
+
+src/alignment/.Rhistory
+src/alignment/.RData
+
 
 # Testing directories (experimental code and notebooks)
 data_collection/testing/
