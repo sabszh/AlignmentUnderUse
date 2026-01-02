@@ -1,0 +1,435 @@
+---
+title: "Alignment Analysis with GAMM (Frequentist)"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    theme: readable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## 0) Packages
+
+```{r}
+pacman::p_load(
+  tidyverse,
+  readr,
+  mgcv,
+  gratia,
+  pheatmap
+)
+```
+
+## 1) Load + clean + filter
+
+```{r}
+# Adjust path relative to this Rmd
+df <- read_csv("../../data/outputs/merged.csv", show_col_types = FALSE)
+
+metrics_list <- c(
+  "lexical_jaccard",
+  "pos_jaccard",
+  "lsm_score",
+  "semantic_similarity",
+  "sentiment_similarity"
+)
+
+# Keep only rows with required fields
+df_clean <- df %>%
+  drop_na(all_of(metrics_list), combined_topic_id, direction, turn, conv_id, combined_keywords) %>%
+  mutate(
+    abs_turn = abs(turn),
+    direction = as.factor(direction),
+    conv_id = as.factor(conv_id)
+  )
+
+# Filter A: conversation length outliers
+conv_stats <- df_clean %>%
+  group_by(conv_id) %>%
+  summarise(n_turns = n(), .groups = "drop")
+
+len_95 <- quantile(conv_stats$n_turns, 0.95, na.rm = TRUE)
+
+valid_conv_ids <- conv_stats %>%
+  filter(n_turns >= 2, n_turns <= len_95) %>%
+  pull(conv_id)
+
+df_filtered <- df_clean %>%
+  filter(conv_id %in% valid_conv_ids)
+
+# Filter B: turn support by absolute turn index
+turn_stats <- df_filtered %>%
+  group_by(abs_turn) %>%
+  summarise(n_convs = n_distinct(conv_id), .groups = "drop")
+
+valid_turns <- turn_stats %>%
+  filter(n_convs >= 200) %>%
+  pull(abs_turn)
+
+df_filtered <- df_filtered %>%
+  filter(abs_turn %in% valid_turns)
+
+cat("Final N rows:", nrow(df_filtered), "\n")
+cat("N conversations:", n_distinct(df_filtered$conv_id), "\n")
+cat("Turn range:", min(df_filtered$abs_turn), "to", max(df_filtered$abs_turn), "\n")
+```
+
+## 2) Topic labels
+
+```{r}
+topic_info <- df_filtered %>%
+  group_by(combined_topic_id) %>%
+  summarise(
+    raw_keywords = first(combined_keywords),
+    n_convs = n_distinct(conv_id),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    clean_keywords = map_chr(str_split(raw_keywords, " / "),
+                             ~ paste(.x[1:min(2, length(.x))], collapse = ", ")),
+    topic_label = paste0(clean_keywords, " (n=", n_convs, ")"),
+    topic_label = as.factor(topic_label)
+  )
+
+df_final <- df_filtered %>%
+  left_join(topic_info %>% dplyr::select(combined_topic_id, topic_label),
+            by = "combined_topic_id")
+```
+
+## 3) Z-scoring
+
+```{r}
+df_long <- df_final %>%
+  pivot_longer(all_of(metrics_list), names_to = "metric", values_to = "value")
+
+df_long <- df_long %>%
+  group_by(metric) %>%
+  mutate(z = as.numeric(scale(value))) %>%
+  ungroup()
+```
+
+## 4) Model specification
+
+The GAMM mirrors the Bayesian structure:
+- Fixed effects for topic and direction, including their interaction
+- Smooth for absolute turn index
+- Random intercept for conversation
+
+```{r}
+gamm_formula <- z ~ 0 + topic_label * direction +
+  s(abs_turn, k = 10, bs = "cs") +
+  s(conv_id, bs = "re")
+```
+
+## 5) Fit models (one per metric)
+
+Outputs:
+- gamm_models (RDS files per metric)
+- gamm_summary.csv (parametric terms)
+- gamm_smooths.csv (smooth term summaries)
+
+```{r}
+models_dir <- "gamm_models"
+dir.create(models_dir, showWarnings = FALSE, recursive = TRUE)
+
+param_summaries <- list()
+smooth_summaries <- list()
+
+for (m in unique(df_long$metric)) {
+  cat("\n===================================================\n")
+  cat("FITTING GAMM:", m, "Time:", format(Sys.time(), "%H:%M:%S"), "\n")
+
+  d <- df_long %>% filter(metric == m)
+
+  fit <- bam(
+    formula = gamm_formula,
+    data = d,
+    method = "fREML",
+    discrete = TRUE,
+    nthreads = max(1, parallel::detectCores() - 1)
+  )
+
+  saveRDS(fit, file = file.path(models_dir, paste0("gamm_", m, ".rds")))
+
+  # Parametric term summary
+  ptab <- summary(fit)$p.table
+  if (!is.null(ptab)) {
+    ptab_df <- as.data.frame(ptab)
+    ptab_df$term <- rownames(ptab)
+    names(ptab_df) <- c("estimate", "std_error", "t_value", "p_value", "term")
+    ptab_df$metric <- m
+    param_summaries[[m]] <- ptab_df
+  }
+
+  # Smooth term summary
+  stab <- summary(fit)$s.table
+  if (!is.null(stab)) {
+    stab_df <- as.data.frame(stab)
+    stab_df$term <- rownames(stab)
+    stab_df$metric <- m
+    smooth_summaries[[m]] <- stab_df
+  }
+
+  write_csv(bind_rows(param_summaries), "gamm_summary.csv")
+  write_csv(bind_rows(smooth_summaries), "gamm_smooths.csv")
+
+  rm(fit, ptab, stab, ptab_df, stab_df)
+  gc()
+}
+```
+
+## 6) Plotting
+
+### 6.1 Direction effects (parametric terms)
+
+```{r fig.height=6, fig.width=10}
+param <- read_csv("gamm_summary.csv", show_col_types = FALSE)
+
+if (!"estimate" %in% names(param) && "Estimate" %in% names(param)) {
+  param <- param %>%
+    rename(
+      estimate = `Estimate`,
+      std_error = `Std. Error`,
+      t_value = `t value`,
+      p_value = `Pr(>|t|)`
+    )
+}
+
+dir_effects <- param %>%
+  filter(str_detect(term, "direction")) %>%
+  mutate(term = str_replace_all(term, "direction", "direction: "))
+
+ggplot(dir_effects, aes(x = estimate, y = term, color = metric)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_point() +
+  geom_errorbarh(
+    aes(xmin = estimate - 1.96 * std_error,
+        xmax = estimate + 1.96 * std_error),
+    height = 0.2
+  ) +
+  facet_wrap(~metric, scales = "free_y") +
+  labs(
+    title = "Direction effects across metrics",
+    x = "Estimate (z)",
+    y = NULL
+  ) +
+  theme_minimal()
+```
+
+### 6.2 Turn-position dynamics (smooth term)
+
+```{r fig.height=6, fig.width=10}
+smooth_df <- read_csv("gamm_smooths.csv", show_col_types = FALSE)
+smooth_df <- smooth_df %>% filter(str_detect(term, "abs_turn"))
+
+ggplot(smooth_df, aes(x = metric, y = edf)) +
+  geom_col(alpha = 0.8) +
+  coord_flip() +
+  labs(
+    title = "Turn smooth complexity (edf by metric)",
+    x = NULL,
+    y = "Effective degrees of freedom"
+  ) +
+  theme_minimal()
+```
+
+### 6.3 Smooth curve for a single metric
+
+```{r fig.height=5, fig.width=9}
+plot_metric <- "semantic_similarity"
+fit_plot <- readRDS(file.path("gamm_models", paste0("gamm_", plot_metric, ".rds")))
+
+smooth_plot <- gratia::draw(fit_plot, select = "s(abs_turn)")
+smooth_plot + ggtitle(paste("Turn dynamics:", plot_metric))
+```
+
+### 6.4 Topic effects by direction (model-based predictions)
+
+This uses model predictions to compare topic effects for each direction while
+excluding the smooth and random-effect terms. It gives direction-specific topic
+effects with standard errors.
+
+```{r fig.height=12, fig.width=12}
+model_files <- list.files("gamm_models", pattern = "^gamm_.*\\.rds$", full.names = TRUE)
+
+topic_pred_list <- list()
+
+for (path in model_files) {
+  metric <- sub("^gamm_(.*)\\.rds$", "\\1", basename(path))
+  fit <- readRDS(path)
+
+  model_data <- fit$model
+  topic_levels <- levels(model_data$topic_label)
+  direction_levels <- levels(model_data$direction)
+
+  grid <- expand.grid(
+    topic_label = topic_levels,
+    direction = direction_levels,
+    stringsAsFactors = FALSE
+  )
+  grid$abs_turn <- median(model_data$abs_turn, na.rm = TRUE)
+  grid$conv_id <- model_data$conv_id[1]
+
+  pred <- predict(
+    fit,
+    newdata = grid,
+    se.fit = TRUE,
+    type = "link",
+    exclude = c("s(abs_turn)", "s(conv_id)")
+  )
+
+  grid$estimate <- as.numeric(pred$fit)
+  grid$std_error <- as.numeric(pred$se.fit)
+  grid$metric <- metric
+
+  topic_pred_list[[metric]] <- grid
+}
+
+topic_pred <- bind_rows(topic_pred_list) %>%
+  mutate(
+    topic_label = as.character(topic_label),
+    direction = gsub("\\u2192", "->", as.character(direction))
+  )
+
+top_topics <- topic_pred %>%
+  group_by(metric, direction) %>%
+  slice_max(order_by = abs(estimate), n = 12, with_ties = FALSE) %>%
+  ungroup()
+
+ggplot(top_topics, aes(x = estimate, y = reorder(topic_label, estimate))) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_point() +
+  geom_errorbarh(
+    aes(xmin = estimate - 1.96 * std_error,
+        xmax = estimate + 1.96 * std_error),
+    height = 0.2
+  ) +
+  facet_grid(direction ~ metric, scales = "free_y") +
+  labs(
+    title = "Topic effects by direction (model-based)",
+    x = "Estimated alignment effect (z)",
+    y = NULL
+  ) +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 7))
+```
+
+### 6.5 Turn smooths across metrics
+
+```{r fig.height=6, fig.width=12}
+smooth_list <- list()
+
+for (path in model_files) {
+  metric <- sub("^gamm_(.*)\\.rds$", "\\1", basename(path))
+  fit <- readRDS(path)
+
+  smooth_df <- gratia::smooth_estimates(fit, smooth = "s(abs_turn)")
+  if (".estimate" %in% names(smooth_df)) {
+    smooth_df <- smooth_df %>% rename(estimate = .estimate)
+  }
+  if (".se" %in% names(smooth_df)) {
+    smooth_df <- smooth_df %>% rename(se = .se)
+  }
+  if (!"lower_ci" %in% names(smooth_df)) {
+    if (".lower_ci" %in% names(smooth_df)) {
+      smooth_df <- smooth_df %>% rename(lower_ci = .lower_ci)
+    } else if (!is.null(smooth_df$se)) {
+      smooth_df$lower_ci <- smooth_df$estimate - 1.96 * smooth_df$se
+    }
+  }
+  if (!"upper_ci" %in% names(smooth_df)) {
+    if (".upper_ci" %in% names(smooth_df)) {
+      smooth_df <- smooth_df %>% rename(upper_ci = .upper_ci)
+    } else if (!is.null(smooth_df$se)) {
+      smooth_df$upper_ci <- smooth_df$estimate + 1.96 * smooth_df$se
+    }
+  }
+  smooth_df$metric <- metric
+  smooth_list[[metric]] <- smooth_df
+}
+
+smooth_all <- bind_rows(smooth_list)
+
+ggplot(smooth_all, aes(x = abs_turn, y = estimate)) +
+  geom_ribbon(aes(ymin = lower_ci, ymax = upper_ci), alpha = 0.2) +
+  geom_line() +
+  facet_wrap(~ metric, scales = "free_y") +
+  labs(
+    title = "Turn-position dynamics across metrics",
+    x = "Absolute turn index",
+    y = "Smooth contribution (z)"
+  ) +
+  theme_minimal()
+```
+
+### 6.6 Topic-specific trajectories over turns (model-based)
+
+These trajectories show how alignment evolves over turns for a small set of
+high-frequency topics. Because the GAMM includes a single smooth for turns,
+the curves are parallel shifts across topics; any topic-specific temporal
+differences would require a smooth that varies by topic.
+
+```{r fig.height=10, fig.width=12}
+top_topics_n <- 8
+
+topic_counts <- df_final %>%
+  group_by(topic_label) %>%
+  summarise(n_convs = n_distinct(conv_id), .groups = "drop") %>%
+  arrange(desc(n_convs))
+
+top_topics <- topic_counts %>%
+  slice_head(n = top_topics_n) %>%
+  pull(topic_label)
+
+trajectory_list <- list()
+
+for (path in model_files) {
+  metric <- sub("^gamm_(.*)\\.rds$", "\\1", basename(path))
+  fit <- readRDS(path)
+
+  model_data <- fit$model
+  direction_levels <- levels(model_data$direction)
+
+  turn_grid <- sort(unique(model_data$abs_turn))
+
+  grid <- expand.grid(
+    abs_turn = turn_grid,
+    topic_label = top_topics,
+    direction = direction_levels,
+    stringsAsFactors = FALSE
+  )
+  grid$conv_id <- model_data$conv_id[1]
+
+  pred <- predict(
+    fit,
+    newdata = grid,
+    se.fit = TRUE,
+    type = "link",
+    exclude = "s(conv_id)"
+  )
+
+  grid$estimate <- as.numeric(pred$fit)
+  grid$std_error <- as.numeric(pred$se.fit)
+  grid$metric <- metric
+
+  trajectory_list[[metric]] <- grid
+}
+
+traj_df <- bind_rows(trajectory_list) %>%
+  mutate(direction = gsub("\\u2192", "->", as.character(direction)))
+
+ggplot(traj_df, aes(x = abs_turn, y = estimate, color = topic_label)) +
+  geom_line(alpha = 0.8) +
+  facet_grid(direction ~ metric, scales = "free_y") +
+  labs(
+    title = "Topic trajectories over turns (model-based)",
+    x = "Absolute turn index",
+    y = "Estimated alignment (z)",
+    color = "Topic"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```

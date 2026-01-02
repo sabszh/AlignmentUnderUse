@@ -1,0 +1,607 @@
+---
+title: "Bayesian Topic Effects (Publishable Baseline)"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    theme: readable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## 0) Packages
+
+```{r}
+pacman::p_load(
+  brms,
+  cmdstanr,
+  tidyverse,
+  readr,
+  tidybayes,
+  posterior,
+  bayesplot
+)
+```
+
+## 1) Run configuration
+
+```{r}
+set.seed(123)
+
+metrics_list <- c(
+  "lexical_jaccard",
+  "pos_jaccard",
+  "lsm_score",
+  "semantic_similarity",
+  "sentiment_similarity"
+)
+
+# Use cmdstanr if available, otherwise fall back to rstan
+if (requireNamespace("cmdstanr", quietly = TRUE) &&
+    !is.na(cmdstanr::cmdstan_version(error_on_NA = FALSE))) {
+  backend_to_use <- "cmdstanr"
+} else {
+  backend_to_use <- "rstan"
+}
+
+options(mc.cores = parallel::detectCores())
+
+# Publishable sampling settings
+chains_pub <- 4
+iter_pub   <- 4000
+warmup_pub <- 1000
+sampling_ctrl <- list(adapt_delta = 0.95, max_treedepth = 12)
+
+# Compilation settings for cmdstanr
+stan_opt <- list(stanc_options = list("O1"))
+threads_per_chain <- 12
+use_threading <- backend_to_use == "cmdstanr"
+thread_args <- if (use_threading) {
+  list(threads = threading(threads_per_chain))
+} else {
+  list()
+}
+
+cat("Backend:", backend_to_use, "\n")
+if (backend_to_use == "cmdstanr") {
+  cat("CmdStan version:", cmdstanr::cmdstan_version(), "\n")
+}
+
+brm_base_args <- list(
+  family = gaussian(),
+  prior = my_priors,
+  chains = chains_pub,
+  iter = iter_pub,
+  warmup = warmup_pub,
+  seed = 123,
+  backend = backend_to_use,
+  cores = chains_pub,
+  refresh = 0,
+  control = sampling_ctrl,
+  silent = 2,
+  file_refit = "on_change"
+)
+```
+
+## 2) Load + clean + filter
+
+```{r}
+df <- read_csv("../../data/outputs/merged.csv", show_col_types = FALSE)
+
+df_clean <- df %>%
+  select(conv_id, combined_topic_id, combined_keywords, all_of(metrics_list)) %>%
+  drop_na(all_of(metrics_list), combined_topic_id, conv_id, combined_keywords) %>%
+  mutate(conv_id = as.factor(conv_id))
+
+# Filter A: conversation length outliers
+conv_stats <- df_clean %>%
+  group_by(conv_id) %>%
+  summarise(n_turns = n(), .groups = "drop")
+
+len_95 <- quantile(conv_stats$n_turns, 0.95, na.rm = TRUE)
+valid_conv_ids <- conv_stats %>%
+  filter(n_turns >= 2, n_turns <= len_95) %>%
+  pull(conv_id)
+
+df_filtered <- df_clean %>%
+  filter(conv_id %in% valid_conv_ids)
+
+cat("Final N rows:", nrow(df_filtered), "\n")
+cat("N conversations:", n_distinct(df_filtered$conv_id), "\n")
+```
+
+## 3) Topic labels and z-scoring
+
+```{r}
+topic_info <- df_filtered %>%
+  group_by(combined_topic_id) %>%
+  summarise(
+    raw_keywords = first(combined_keywords),
+    n_convs = n_distinct(conv_id),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    clean_keywords = map_chr(str_split(raw_keywords, " / "),
+                             ~ paste(.x[1:min(2, length(.x))], collapse = ", ")),
+    topic_label = paste0(clean_keywords, " (n=", n_convs, ")"),
+    topic_label = as.factor(topic_label)
+  )
+
+df_final <- df_filtered %>%
+  left_join(topic_info %>% dplyr::select(combined_topic_id, topic_label),
+            by = "combined_topic_id")
+
+df_z <- df_final %>%
+  mutate(across(all_of(metrics_list), ~ as.numeric(scale(.))))
+```
+
+## 4) Model specification
+
+Topic-only model with conversation random intercept.
+
+```{r}
+my_priors <- c(
+  set_prior("normal(0, 1)", class = "b"),
+  set_prior("exponential(1)", class = "sd"),
+  set_prior("exponential(1)", class = "sigma")
+)
+```
+
+## 5) Fit models (one per metric)
+
+Outputs:
+- bayes_topics_draws.csv
+- bayes_topics_hierarchical_stats.csv
+- bayes_topics_diagnostics.csv
+- bayes_topics_ppc.png
+
+```{r}
+draws_list <- list()
+hierarchy_stats <- list()
+diagnostics <- list()
+
+output_dir <- "bayes_topics_outputs"
+models_dir <- file.path(output_dir, "models")
+dir.create(models_dir, showWarnings = FALSE, recursive = TRUE)
+
+for (metric in metrics_list) {
+
+  cat("\n===================================================\n")
+  cat("STARTING:", metric, "Time:", format(Sys.time(), "%H:%M:%S"), "\n")
+
+  f <- as.formula(paste(metric, "~ 0 + topic_label + (1 | conv_id)"))
+
+  brm_args <- c(
+    list(
+      formula = f,
+      data = df_z,
+      file = file.path(models_dir, paste0("brm_", metric))
+    ),
+    brm_base_args
+  )
+
+  if (backend_to_use == "cmdstanr") {
+    brm_args <- c(
+      brm_args,
+      list(
+        stan_model_args = stan_opt,
+        threads = thread_args$threads
+      )
+    )
+  }
+
+  fit <- do.call(brm, brm_args)
+
+  saveRDS(fit, file = file.path(models_dir, paste0("brm_", metric, ".rds")))
+
+  # Diagnostics: Rhat and ESS for fixed effects
+  summ <- summary(fit)
+  rhat_max <- max(summ$fixed[,"Rhat"], na.rm = TRUE)
+  ess_min <- min(summ$fixed[,"Bulk_ESS"], na.rm = TRUE)
+
+  diagnostics[[metric]] <- tibble(
+    metric = metric,
+    rhat_max_fixed = as.numeric(rhat_max),
+    ess_min_fixed = as.numeric(ess_min)
+  )
+
+  # Hierarchical stats
+  vc <- VarCorr(fit)
+  conv_sd <- vc$conv_id$sd[1]
+  residual_sd <- if (!is.null(vc$residual$sd[1])) vc$residual$sd[1] else NA
+
+  hierarchy_stats[[metric]] <- tibble(
+    metric = metric,
+    conv_sd = as.numeric(conv_sd),
+    residual_sd = as.numeric(residual_sd)
+  )
+
+  # Topic coefficient draws
+  draws_raw <- as_draws_df(fit)
+  topic_cols <- names(draws_raw)[str_detect(names(draws_raw), "^b_topic_label")]
+
+  draws <- draws_raw %>%
+    select(all_of(topic_cols), .chain, .iteration, .draw) %>%
+    pivot_longer(
+      cols = all_of(topic_cols),
+      names_to = "full_param_name",
+      values_to = "value"
+    ) %>%
+    mutate(
+      topic_clean = str_remove(full_param_name, "^b_topic_label"),
+      metric = metric
+    )
+
+  draws_list[[metric]] <- draws
+
+  write_csv(bind_rows(draws_list), file.path(output_dir, "bayes_topics_draws.csv"))
+  write_csv(bind_rows(hierarchy_stats), file.path(output_dir, "bayes_topics_hierarchical_stats.csv"))
+  write_csv(bind_rows(diagnostics), file.path(output_dir, "bayes_topics_diagnostics.csv"))
+
+  # Posterior predictive check
+  png(filename = file.path(output_dir, paste0("bayes_topics_ppc_", metric, ".png")), width = 1000, height = 700)
+  print(pp_check(fit, ndraws = 100))
+  dev.off()
+
+  rm(fit, draws_raw, draws, vc)
+  gc()
+
+  cat("DONE:", metric, "\n")
+}
+```
+
+## 6) Topic effects plot
+
+```{r fig.height=12, fig.width=12}
+topic_draws <- read_csv("bayes_topics_outputs/bayes_topics_draws.csv", show_col_types = FALSE)
+
+topic_summ <- topic_draws %>%
+  group_by(metric, topic_clean) %>%
+  median_qi(value, .width = 0.89) %>%
+  ungroup()
+
+topic_summ <- topic_summ %>%
+  group_by(metric) %>%
+  mutate(topic_clean = fct_reorder(topic_clean, value)) %>%
+  ungroup()
+
+ggplot(topic_summ, aes(x = value, y = topic_clean)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+  ggdist::geom_pointinterval(
+    aes(xmin = .lower, xmax = .upper),
+    size = 0.3
+  ) +
+  facet_wrap(~metric, scales = "free_y") +
+  labs(
+    title = "Topic effects with 89 percent intervals",
+    x = "Posterior effect on standardized alignment (z)",
+    y = NULL
+  ) +
+  theme_bw() +
+  theme(
+    strip.text = element_text(face = "bold"),
+    axis.text.y = element_text(size = 7)
+  )
+
+```
+
+## 7) Diagnostic checklist
+
+```{r}
+pacman::p_load(brms, posterior,bayesplot,tidyverse)
+
+models_dir <- "bayes_topics_outputs/models"
+model_files <- list.files(models_dir, pattern = "\\.rds$", full.names = TRUE)
+
+```
+
+```{r}
+diag_table <- map_dfr(model_files, function(f) {
+  fit <- readRDS(f)
+  summ <- summary(fit)
+  
+  draws <- as_draws_df(fit)
+  
+  tibble(
+    metric = gsub("^brm_|\\.rds$", "", basename(f)),
+    rhat_max_fixed = max(summ$fixed[, "Rhat"], na.rm = TRUE),
+    ess_min_fixed  = min(summ$fixed[, "Bulk_ESS"], na.rm = TRUE),
+    n_divergent    = sum(draws$divergent__ == 1, na.rm = TRUE)
+  )
+})
+
+write_csv(diag_table, "bayes_topics_outputs/diagnostics_convergence.csv")
+diag_table
+
+```
+```{r}
+ppc_dir <- "bayes_topics_outputs/ppc"
+dir.create(ppc_dir, showWarnings = FALSE)
+
+for (f in model_files) {
+  fit <- readRDS(f)
+  metric <- gsub("^brm_|\\.rds$", "", basename(f))
+  
+  png(file.path(ppc_dir, paste0("ppc_density_", metric, ".png")),
+      width = 1000, height = 700)
+  print(pp_check(fit, type = "dens_overlay", ndraws = 100))
+  dev.off()
+}
+```
+
+```{r}
+pp_check(fit, type = "stat", stat = "sd")
+pp_check(fit, type = "stat", stat = "mean")
+```
+
+```{r}
+resid_dir <- "bayes_topics_outputs/residuals"
+dir.create(resid_dir, showWarnings = FALSE)
+
+for (f in model_files) {
+  fit <- readRDS(f)
+  metric <- gsub("^brm_|\\.rds$", "", basename(f))
+  
+  png(file.path(resid_dir, paste0("residuals_", metric, ".png")),
+      width = 1000, height = 700)
+  print(plot(residuals(fit)))
+  dev.off()
+}
+```
+
+```{r}
+re_table <- map_dfr(model_files, function(f) {
+  fit <- readRDS(f)
+  vc <- VarCorr(fit)
+  
+  tibble(
+    metric = gsub("^brm_|\\.rds$", "", basename(f)),
+    sd_conv = vc$conv_id$sd[1],
+    sd_residual = vc$residual$sd[1]
+  )
+})
+
+write_csv(re_table, "bayes_topics_outputs/diagnostics_variance.csv")
+re_table
+
+```
+
+```{r}
+re_table <- map_dfr(model_files, function(f) {
+  fit <- readRDS(f)
+  vc <- VarCorr(fit)
+  
+  tibble(
+    metric = gsub("^brm_|\\.rds$", "", basename(f)),
+    sd_conv = vc$conv_id$sd[1],
+    sd_residual = vc$residual$sd[1]
+  )
+})
+
+write_csv(re_table, "bayes_topics_outputs/diagnostics_variance.csv")
+re_table
+```
+
+```{r}
+topic_heat <- topic_summ %>%
+  select(metric, topic_clean, value)
+
+ggplot(topic_heat, aes(metric, topic_clean, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(midpoint = 0, low = "#b2182b", mid = "white", high = "#2166ac") +
+  labs(
+    title = "Topic-level alignment across metrics",
+    fill = "Posterior median (z)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 7))
+```
+```{r}
+topic_wide <- topic_summ %>%
+  select(metric, topic_clean, value) %>%
+  pivot_wider(names_from = metric, values_from = value)
+
+cor_df <- cor(topic_wide |> select(-topic_clean))
+
+cor_long <- as.data.frame(as.table(cor_df)) %>%
+  rename(metric_x = Var1, metric_y = Var2, r = Freq)
+
+ggplot(cor_long, aes(metric_x, metric_y, fill = r)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(
+    midpoint = 0,
+    low = "#b2182b",
+    mid = "white",
+    high = "#2166ac",
+    limits = c(-1, 1)
+  ) +
+  labs(
+    title = "Correlation of topic effects across alignment metrics",
+    fill = "Pearson r"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+```{r}
+topic_draws_wide <- topic_draws %>%
+  select(metric, topic_clean, value, .draw) %>%
+  pivot_wider(names_from = metric, values_from = value)
+
+cor_draws <- topic_draws_wide %>%
+  group_by(.draw) %>%
+  summarise(
+    cor_lex_sem = cor(lexical_jaccard, semantic_similarity),
+    cor_lex_sent = cor(lexical_jaccard, sentiment_similarity),
+    cor_sem_sent = cor(semantic_similarity, sentiment_similarity),
+    .groups = "drop"
+  )
+
+ggplot(cor_draws, aes(cor_lex_sem)) +
+  geom_histogram(bins = 40, fill = "grey70", color = "white") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(
+    title = "Posterior distribution of metric–metric correlation",
+    x = "Correlation",
+    y = "Count"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+topic_uncertainty <- topic_draws %>%
+  group_by(metric, topic_clean) %>%
+  summarise(
+    median = median(value),
+    width = quantile(value, 0.945) - quantile(value, 0.055),
+    .groups = "drop"
+  )
+
+ggplot(topic_uncertainty, aes(median, width)) +
+  geom_point(alpha = 0.6) +
+  facet_wrap(~ metric) +
+  labs(
+    x = "Posterior median (z)",
+    y = "89% interval width"
+  ) +
+  theme_minimal()
+
+```
+
+```{r}
+re_table %>%
+  mutate(ratio = sd_conv / sd_residual) %>%
+  ggplot(aes(metric, ratio)) +
+  geom_col() +
+  labs(
+    y = "Conversation SD / Residual SD",
+    title = "Relative contribution of conversation-level variation"
+  ) +
+  theme_minimal()
+
+```
+```{r}
+topic_ranks <- topic_summ %>%
+  group_by(metric) %>%
+  mutate(rank = rank(value)) %>%
+  ungroup()
+
+ggplot(topic_ranks, aes(metric, rank, group = topic_clean)) +
+  geom_line(alpha = 0.15) +
+  scale_y_reverse() +
+  labs(title = "Topic rank stability across alignment metrics") +
+  theme_minimal()
+```
+```{r}
+topic_dispersion <- topic_summ %>%
+  group_by(topic_clean) %>%
+  summarise(
+    dispersion = sd(value),
+    .groups = "drop"
+  )
+
+ggplot(topic_dispersion, aes(x = reorder(topic_clean, dispersion), y = dispersion)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    y = "SD of topic effects across metrics",
+    x = NULL,
+    title = "Metric disagreement within topics"
+  ) +
+  theme_minimal()
+
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+pacman::p_load(ggdendro,patchwork)
+```
+
+
+```{r topic-clustered-heatmap, fig.width=14, fig.height=10, dpi=300}
+# 1) Build topic × metric matrix (posterior medians)
+topic_matrix <- topic_summ %>%
+  select(topic_clean, metric, value) %>%
+  pivot_wider(names_from = metric, values_from = value) %>%
+  column_to_rownames("topic_clean") %>%
+  as.matrix()
+
+# 2) Standardize across metrics
+topic_matrix_scaled <- scale(topic_matrix)
+
+# 3) Hierarchical clustering (chosen method)
+dist_mat <- dist(topic_matrix_scaled, method = "euclidean")
+hc <- hclust(dist_mat, method = "ward.D2")
+
+# Extract ordering
+topic_order <- hc$labels[hc$order]
+
+# 4) Dendrogram data
+dendro <- ggdendro::dendro_data(hc, type = "rectangle")
+
+p_dendro <- ggplot() +
+  geom_segment(
+    data = dendro$segments,
+    aes(x = y, y = x, xend = yend, yend = xend)
+  ) +
+  scale_y_continuous(
+    breaks = seq_along(topic_order),
+    labels = topic_order
+  ) +
+  coord_cartesian(clip = "off") +
+  theme_void() +
+  theme(
+    axis.text.y = element_blank(),   # labels now live on heatmap
+    plot.margin = margin(5, 5, 5, 0)
+  )
+
+# 5) Heatmap (ordered by clustering)
+p_heatmap <- topic_summ %>%
+  mutate(topic_clean = factor(topic_clean, levels = topic_order)) %>%
+  ggplot(aes(metric, topic_clean, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(
+    midpoint = 0,
+    low = "#b2182b",
+    mid = "white",
+    high = "#2166ac",
+    limits = c(-0.5, 0.5),
+    oob = scales::squish
+  ) +
+  labs(
+    x = "Alignment metric",
+    y = NULL,
+    fill = "Posterior median (z)"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 9),
+    panel.grid = element_blank(),
+    plot.margin = margin(5, 0, 5, 10)
+  )
+
+
+# 6) Combine dendrogram + heatmap
+patchwork::wrap_plots(
+  p_heatmap,
+  p_dendro,
+  nrow = 1,
+  widths = c(3.2, 1.4)
+)
+
+```
+
+```{r}
+class(p_dendro)
+class(p_heatmap)
+
+```
+
+
+

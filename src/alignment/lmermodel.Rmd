@@ -15,32 +15,10 @@ knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 
 ```{r}
 pacman::p_load(
-  brms,
-  cmdstanr,
   tidyverse,
   readr,
-  tidybayes,
-  posterior,
-  ggdist,
-  ggridges,
-  pheatmap,
-  bayesplot
+  pheatmap
 )
-
-# Use cmdstanr if available
-# Use cmdstanr if available
-if (requireNamespace("cmdstanr", quietly = TRUE) &&
-    !is.na(cmdstanr::cmdstan_version(error_on_NA = FALSE))) {
-  message("✅ Using CmdStan backend")
-  backend_to_use <- "cmdstanr"
-} else {
-  message("⚠️ CmdStan not available, falling back to rstan")
-  backend_to_use <- "rstan"
-}
-
-
-options(mc.cores = parallel::detectCores())
-set.seed(123)
 
 metrics_list <- c(
   "lexical_jaccard",
@@ -130,87 +108,220 @@ df_long <- df_long %>%
   ungroup()
 ```
 
+## 4) Fit LMER models by metric
+This section fits one mixed-effects model per metric with:
+- Fixed effects for topic, direction, and their interaction
+- A spline over absolute turn index to model non-linear turn dynamics
+- A random intercept for conversation to absorb repeated-measures structure
 
 ```{r}
-## 4) Frequentist mixed GAM (mgcv)
+library(lme4)
+library(splines)
 
-pacman::p_load(
-  mgcv,
-  gratia   # nice plotting + smooth diagnostics
-)
-
-```
-
-```{r}
-## Example: lexical_jaccard only
-d <- df_long %>% filter(metric == "lexical_jaccard")
-
-
-fit_gam <- gam(
-  z ~ 0 + topic_label * direction +
-    s(abs_turn, k = 10) +
-    s(conv_id, bs = "re"),
-  data = d,
-  method = "REML",
-  control = gam.control(trace = TRUE)
-)
-```
-
-```{r}
-gam_fits <- list()
+lmer_fits <- list()
+timings <- tibble()
 
 for (m in unique(df_long$metric)) {
 
   cat("\n==============================\n")
-  cat("FITTING GAM FOR:", m, "\n")
+  cat("FITTING LMER FOR:", m, "\n")
+  cat("Start:", format(Sys.time(), "%H:%M:%S"), "\n")
+
+  t_start <- Sys.time()
 
   d <- df_long %>% filter(metric == m)
 
-  gam_fits[[m]] <- gam(
+  fit <- lmer(
     z ~ 0 + topic_label * direction +
-      s(abs_turn, k = 10) +
-      s(conv_id, bs = "re"),
+      ns(abs_turn, df = 6) +
+      (1 | conv_id),
     data = d,
-    method = "REML",
-    control = gam.control(trace = TRUE)
+    REML = TRUE,
+    control = lmerControl(
+      optimizer = "bobyqa",
+      optCtrl = list(maxfun = 1e5)
+    )
   )
-  print(summary(gam_fits[[m]]))
+
+  t_end <- Sys.time()
+
+  cat("Finished:", format(t_end, "%H:%M:%S"),
+      "Elapsed:",
+      round(difftime(t_end, t_start, units = "mins"), 2), "min\n")
+
+  print(summary(fit))
+
+  lmer_fits[[m]] <- fit
+
+  timings <- bind_rows(
+    timings,
+    tibble(
+      metric = m,
+      start = t_start,
+      end = t_end,
+      elapsed_min = as.numeric(difftime(t_end, t_start, units = "mins"))
+    )
+  )
 }
 
-```
+timings
 
-```{r}
-## Turn smooth
-draw(fit_gam) +
-  labs(title = "Smooth effect of conversation position",
-       x = "|turn|",
-       y = "Partial effect on alignment (z)")
-```
-
-```{r}
-plot(fit_gam, select = 1, shade = TRUE)
-```
-
-```{r}
-library(broom)
-
-tidy(fit_gam, parametric = TRUE) %>%
-  filter(str_detect(term, "topic_label")) %>%
-  arrange(estimate)
 
 ```
-
+## 5) Turn-dynamics plots
+These plots show predicted alignment by absolute turn index and direction for each metric,
+with fixed effects only and confidence bands.
 ```{r}
-fit_gam_dir <- gam(
-  z ~ 0 + topic_label * direction +
-    s(abs_turn, by = direction, k = 10) +
-    s(conv_id, bs = "re"),
-  data = d,
-  method = "REML"
+pacman::p_load(ggeffects,patchwork)
+
+plot_list <- list()
+
+for (m in names(lmer_fits)) {
+
+  m_fit <- lmer_fits[[m]]
+
+  preds <- ggpredict(
+    m_fit,
+    terms = c("abs_turn [all]", "direction"),
+    type = "fixed"
+  )
+
+  preds$metric <- m
+
+  p <- ggplot(preds, aes(x = x, y = predicted, color = group)) +
+    geom_line(linewidth = 1) +
+    geom_ribbon(
+      aes(ymin = conf.low, ymax = conf.high, fill = group),
+      alpha = 0.2,
+      color = NA
+    ) +
+    labs(
+      title = m,
+      x = "|Turn|",
+      y = "Predicted alignment (z)",
+      color = "Direction",
+      fill = "Direction"
+    ) +
+    theme_minimal()
+
+  plot_list[[m]] <- p
+}
+
+wrap_plots(plot_list, ncol = 2)
+
+```
+## 6) Direction effect summary
+This plot isolates the global fixed effect of direction for each metric.
+It visualizes the estimate with a 95% Wald confidence interval.
+```{r}
+pacman::p_load(broom.mixed)
+
+dir_effects <- map_dfr(
+  lmer_fits,
+  ~ tidy(.x, effects = "fixed") %>%
+    filter(term == "directionuser→assistant"),
+  .id = "metric"
 )
 
-draw(fit_gam_dir)
+ggplot(dir_effects, aes(x = estimate, y = metric)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+  geom_point(size = 3) +
+  geom_errorbarh(
+    aes(xmin = estimate - 1.96 * std.error,
+        xmax = estimate + 1.96 * std.error),
+    height = 0.2
+  ) +
+  labs(
+    x = "Assistant – User alignment (z)",
+    y = NULL,
+    title = "Global direction effect across alignment metrics"
+  ) +
+  theme_minimal()
 
 ```
 
+## 7) Topic-by-direction effects for semantic alignment
+The heatmap summarizes topic-specific interaction terms for semantic alignment.
+Positive values indicate stronger alignment for user-to-assistant direction within that topic.
+```{r}
+sem_terms <- tidy(lmer_fits$semantic_similarity, effects = "fixed") %>%
+  filter(str_detect(term, ":directionuser→assistant")) %>%
+  mutate(
+    topic = str_remove(term, ":directionuser→assistant"),
+    topic = str_remove(topic, "topic_label")
+  )
+
+mat <- sem_terms %>%
+  select(topic, estimate) %>%
+  column_to_rownames("topic") %>%
+  as.matrix()
+
+pheatmap::pheatmap(
+  mat,
+  cluster_rows = TRUE,
+  cluster_cols = FALSE,
+  color = colorRampPalette(c("blue", "white", "red"))(100),
+  main = "Assistant semantic over-alignment by topic"
+)
+
+```
+## 8) Lexical vs semantic coupling
+These sections examine how lexical and semantic alignment co-vary overall
+and within conversations, including a partial correlation controlling for turn index.
+```{r}
+df_pair <- df_long %>%
+  filter(metric %in% c("lexical_jaccard", "semantic_similarity")) %>%
+  select(conv_id, turn, abs_turn, direction, metric, z) %>%
+  pivot_wider(names_from = metric, values_from = z)
+
+cor(df_pair$lexical_jaccard, df_pair$semantic_similarity, use = "complete.obs")
+
+```
+
+```{r}
+ggplot(df_pair, aes(x = lexical_jaccard, y = semantic_similarity)) +
+  geom_point(alpha = 0.05) +
+  geom_smooth(method = "lm", se = TRUE, color = "black") +
+  labs(
+    x = "Lexical alignment (z)",
+    y = "Semantic alignment (z)",
+    title = "Raw correlation between lexical and semantic alignment"
+  ) +
+  theme_minimal()
+
+```
+```{r}
+pacman::p_load(ppcor)
+
+pcor.test(
+  df_pair$lexical_jaccard,
+  df_pair$semantic_similarity,
+  df_pair$abs_turn
+)
+
+```
+```{r}
+within_corr <- df_pair %>%
+  group_by(conv_id) %>%
+  summarise(
+    r = cor(lexical_jaccard, semantic_similarity, use = "complete.obs"),
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  filter(n >= 5)
+
+```
+
+```{r}
+ggplot(within_corr, aes(x = r)) +
+  geom_histogram(bins = 40, fill = "grey70", color = "white") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(
+    x = "Within-conversation correlation (r)",
+    y = "Number of conversations",
+    title = "Within-conversation lexical–semantic alignment coupling"
+  ) +
+  theme_minimal()
+
+```
 
