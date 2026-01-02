@@ -44,7 +44,7 @@ data/**
 src/alignment/.Rhistory
 src/alignment/.RData
 src/alignment/*.csv
-
+src/alignment/gamm_models/*.rds
 
 
 # Testing directories (experimental code and notebooks)
