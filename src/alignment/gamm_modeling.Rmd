@@ -18,8 +18,7 @@ pacman::p_load(
   tidyverse,
   readr,
   mgcv,
-  gratia,
-  pheatmap
+  gratia
 )
 ```
 
@@ -113,27 +112,32 @@ df_long <- df_long %>%
 
 ## 4) Model specification
 
-The GAMM mirrors the Bayesian structure:
+The GAMM mirrors the Bayesian structure, with topic-varying temporal dynamics:
 - Fixed effects for topic and direction, including their interaction
-- Smooth for absolute turn index
+- Global smooth for absolute turn index
+- Topic-specific smooth deviations over turns
 - Random intercept for conversation
 
 ```{r}
 gamm_formula <- z ~ 0 + topic_label * direction +
   s(abs_turn, k = 10, bs = "cs") +
+  s(abs_turn, topic_label, k = 8, bs = "fs") +
   s(conv_id, bs = "re")
 ```
 
 ## 5) Fit models (one per metric)
 
-Outputs:
+Outputs (under data/outputs/gamm):
 - gamm_models (RDS files per metric)
 - gamm_summary.csv (parametric terms)
 - gamm_smooths.csv (smooth term summaries)
 
 ```{r}
-models_dir <- "gamm_models"
+outputs_dir <- "../../data/outputs/gamm"
+models_dir <- file.path(outputs_dir, "gamm_models")
+fig_dir <- file.path(outputs_dir, "figures")
 dir.create(models_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(fig_dir, showWarnings = FALSE, recursive = TRUE)
 
 param_summaries <- list()
 smooth_summaries <- list()
@@ -173,8 +177,8 @@ for (m in unique(df_long$metric)) {
     smooth_summaries[[m]] <- stab_df
   }
 
-  write_csv(bind_rows(param_summaries), "gamm_summary.csv")
-  write_csv(bind_rows(smooth_summaries), "gamm_smooths.csv")
+  write_csv(bind_rows(param_summaries), file.path(outputs_dir, "gamm_summary.csv"))
+  write_csv(bind_rows(smooth_summaries), file.path(outputs_dir, "gamm_smooths.csv"))
 
   rm(fit, ptab, stab, ptab_df, stab_df)
   gc()
@@ -186,7 +190,7 @@ for (m in unique(df_long$metric)) {
 ### 6.1 Direction effects (parametric terms)
 
 ```{r fig.height=6, fig.width=10}
-param <- read_csv("gamm_summary.csv", show_col_types = FALSE)
+param <- read_csv(file.path(outputs_dir, "gamm_summary.csv"), show_col_types = FALSE)
 
 if (!"estimate" %in% names(param) && "Estimate" %in% names(param)) {
   param <- param %>%
@@ -199,10 +203,15 @@ if (!"estimate" %in% names(param) && "Estimate" %in% names(param)) {
 }
 
 dir_effects <- param %>%
-  filter(str_detect(term, "direction")) %>%
-  mutate(term = str_replace_all(term, "direction", "direction: "))
+  filter(str_detect(term, "^direction")) %>%
+  filter(!str_detect(term, ":")) %>%
+  mutate(
+    term = str_replace(term, "^direction", ""),
+    term = str_replace_all(term, "\\u2192", "->"),
+    term = paste0("direction", term)
+  )
 
-ggplot(dir_effects, aes(x = estimate, y = term, color = metric)) +
+p_dir_effects <- ggplot(dir_effects, aes(x = estimate, y = term, color = metric)) +
   geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
   geom_point() +
   geom_errorbarh(
@@ -216,16 +225,237 @@ ggplot(dir_effects, aes(x = estimate, y = term, color = metric)) +
     x = "Estimate (z)",
     y = NULL
   ) +
-  theme_minimal()
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 9))
+
+p_dir_effects
+ggsave(file.path(fig_dir, "direction_effects.png"), p_dir_effects, width = 10, height = 6, dpi = 300)
 ```
 
-### 6.2 Turn-position dynamics (smooth term)
+### 6.1b Direction effects with topic interaction dispersion
 
 ```{r fig.height=6, fig.width=10}
-smooth_df <- read_csv("gamm_smooths.csv", show_col_types = FALSE)
-smooth_df <- smooth_df %>% filter(str_detect(term, "abs_turn"))
+extract_direction <- function(term) {
+  has_dir <- str_detect(term, "direction")
+  dir <- str_replace(term, ".*direction", "")
+  dir <- str_replace_all(dir, "[:()]", "")
+  dir <- str_replace_all(dir, "\\s+", "")
+  ifelse(has_dir, dir, NA_character_)
+}
 
-ggplot(smooth_df, aes(x = metric, y = edf)) +
+dir_main <- param %>%
+  filter(str_detect(term, "^direction")) %>%
+  filter(!str_detect(term, ":")) %>%
+  mutate(
+    direction = extract_direction(term),
+    direction = if_else(direction == "", "direction", direction)
+  )
+
+dir_inter <- param %>%
+  filter(str_detect(term, "direction")) %>%
+  filter(str_detect(term, ":")) %>%
+  mutate(
+    direction = extract_direction(term),
+    direction = if_else(direction == "", "direction", direction)
+  )
+
+p_dir_dispersion <- ggplot() +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_point(
+    data = dir_inter,
+    aes(x = estimate, y = metric, color = direction),
+    alpha = 0.25,
+    size = 1.5,
+    position = position_jitter(height = 0.1, width = 0)
+  ) +
+  geom_errorbarh(
+    data = dir_main,
+    aes(xmin = estimate - 1.96 * std_error, xmax = estimate + 1.96 * std_error, y = metric, color = direction),
+    height = 0.15,
+    size = 0.6
+  ) +
+  geom_point(
+    data = dir_main,
+    aes(x = estimate, y = metric, color = direction),
+    size = 2.5
+  ) +
+  labs(
+    title = "Direction effects with topic interaction dispersion",
+    x = "Estimate (z)",
+    y = NULL,
+    color = "Direction"
+  ) +
+  theme_minimal()
+
+p_dir_dispersion
+ggsave(file.path(fig_dir, "direction_effects_with_dispersion.png"), p_dir_dispersion,
+       width = 10, height = 6, dpi = 300)
+```
+
+### 6.1c Direction marginal means (model-based)
+
+This version shows both directions by plotting model-based marginal means,
+averaged across topics at a representative turn position.
+
+```{r fig.height=6, fig.width=9}
+model_files <- list.files(models_dir, pattern = "^gamm_.*\\.rds$", full.names = TRUE)
+
+dir_pred_list <- list()
+
+for (path in model_files) {
+  metric <- sub("^gamm_(.*)\\.rds$", "\\1", basename(path))
+  fit <- readRDS(path)
+
+  model_data <- fit$model
+  topic_levels <- levels(model_data$topic_label)
+  direction_levels <- levels(model_data$direction)
+
+  grid <- expand.grid(
+    topic_label = topic_levels,
+    direction = direction_levels,
+    stringsAsFactors = FALSE
+  )
+  grid$abs_turn <- median(model_data$abs_turn, na.rm = TRUE)
+  grid$conv_id <- model_data$conv_id[1]
+
+  pred <- predict(
+    fit,
+    newdata = grid,
+    se.fit = TRUE,
+    type = "link",
+    exclude = "s(conv_id)"
+  )
+
+  grid$estimate <- as.numeric(pred$fit)
+  grid$std_error <- as.numeric(pred$se.fit)
+  grid$metric <- metric
+
+  dir_pred_list[[metric]] <- grid
+}
+
+dir_pred <- bind_rows(dir_pred_list) %>%
+  mutate(direction = gsub("\\u2192", "->", as.character(direction))) %>%
+  group_by(metric, direction) %>%
+  summarise(
+    estimate = mean(estimate, na.rm = TRUE),
+    std_error = sqrt(mean(std_error^2, na.rm = TRUE)),
+    .groups = "drop"
+  )
+
+p_dir_means <- ggplot(dir_pred, aes(x = estimate, y = metric, color = direction)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_point(size = 2.5, position = position_dodge(width = 0.3)) +
+  geom_errorbarh(
+    aes(xmin = estimate - 1.96 * std_error, xmax = estimate + 1.96 * std_error),
+    height = 0.2,
+    position = position_dodge(width = 0.3)
+  ) +
+  labs(
+    title = "Direction marginal means (model-based)",
+    x = "Estimated alignment (z)",
+    y = NULL,
+    color = "Direction"
+  ) +
+  theme_minimal()
+
+p_dir_means
+ggsave(file.path(fig_dir, "direction_marginal_means.png"), p_dir_means,
+       width = 9, height = 6, dpi = 300)
+```
+
+### 6.1d Direction difference over turns (model-based)
+
+This uses model predictions over turns and averages across topics. With the
+current GAMM (no direction-specific smooth), the difference is expected to be
+flat over turns, but this plot makes that explicit.
+
+```{r fig.height=6, fig.width=10}
+model_files <- list.files(models_dir, pattern = "^gamm_.*\\.rds$", full.names = TRUE)
+
+diff_list <- list()
+
+for (path in model_files) {
+  metric <- sub("^gamm_(.*)\\.rds$", "\\1", basename(path))
+  fit <- readRDS(path)
+
+  model_data <- fit$model
+  direction_levels <- levels(model_data$direction)
+
+  turn_grid <- 1:20
+  grid <- expand.grid(
+    abs_turn = turn_grid,
+    topic_label = levels(model_data$topic_label),
+    direction = direction_levels,
+    stringsAsFactors = FALSE
+  )
+  grid$conv_id <- model_data$conv_id[1]
+
+  pred <- predict(
+    fit,
+    newdata = grid,
+    se.fit = TRUE,
+    type = "link",
+    exclude = "s(conv_id)"
+  )
+
+  grid$estimate <- as.numeric(pred$fit)
+  grid$std_error <- as.numeric(pred$se.fit)
+  grid$metric <- metric
+
+  grid_summ <- grid %>%
+    group_by(metric, direction, abs_turn) %>%
+    summarise(
+      estimate = mean(estimate, na.rm = TRUE),
+      std_error = sqrt(mean(std_error^2, na.rm = TRUE)),
+      .groups = "drop"
+    )
+
+  if (length(direction_levels) >= 2) {
+    d1 <- direction_levels[1]
+    d2 <- direction_levels[2]
+    d1_df <- grid_summ %>% filter(direction == d1)
+    d2_df <- grid_summ %>% filter(direction == d2)
+    diff_df <- d1_df %>%
+      inner_join(d2_df, by = c("metric", "abs_turn"), suffix = c("_d1", "_d2")) %>%
+      mutate(
+        direction_contrast = paste0(d1, " minus ", d2),
+        estimate = estimate_d1 - estimate_d2,
+        std_error = sqrt(std_error_d1^2 + std_error_d2^2)
+      ) %>%
+      select(metric, abs_turn, direction_contrast, estimate, std_error)
+    diff_list[[metric]] <- diff_df
+  }
+}
+
+dir_diff <- bind_rows(diff_list) %>%
+  mutate(direction_contrast = gsub("\\u2192", "->", as.character(direction_contrast)))
+
+p_dir_diff <- ggplot(dir_diff, aes(x = abs_turn, y = estimate)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_ribbon(aes(ymin = estimate - 1.96 * std_error, ymax = estimate + 1.96 * std_error),
+              alpha = 0.2) +
+  geom_line() +
+  facet_wrap(~ metric, scales = "free_y") +
+  labs(
+    title = "Direction difference over turns (model-based)",
+    subtitle = "User→assistant minus assistant→user",
+    x = "Absolute turn index",
+    y = "Estimated difference (z)"
+  ) +
+  theme_minimal()
+
+p_dir_diff
+ggsave(file.path(fig_dir, "direction_difference_over_turns.png"), p_dir_diff,
+       width = 10, height = 6, dpi = 300)
+```
+
+### 6.2 Turn-position dynamics (global smooth term)
+
+```{r fig.height=6, fig.width=10}
+smooth_df <- read_csv(file.path(outputs_dir, "gamm_smooths.csv"), show_col_types = FALSE)
+smooth_df <- smooth_df %>% filter(term == "s(abs_turn)")
+
+p_smooth_edf <- ggplot(smooth_df, aes(x = metric, y = edf)) +
   geom_col(alpha = 0.8) +
   coord_flip() +
   labs(
@@ -234,16 +464,22 @@ ggplot(smooth_df, aes(x = metric, y = edf)) +
     y = "Effective degrees of freedom"
   ) +
   theme_minimal()
+
+p_smooth_edf
+ggsave(file.path(fig_dir, "turn_smooth_edf.png"), p_smooth_edf, width = 10, height = 6, dpi = 300)
 ```
 
 ### 6.3 Smooth curve for a single metric
 
 ```{r fig.height=5, fig.width=9}
 plot_metric <- "semantic_similarity"
-fit_plot <- readRDS(file.path("gamm_models", paste0("gamm_", plot_metric, ".rds")))
+fit_plot <- readRDS(file.path(models_dir, paste0("gamm_", plot_metric, ".rds")))
 
-smooth_plot <- gratia::draw(fit_plot, select = "s(abs_turn)")
-smooth_plot + ggtitle(paste("Turn dynamics:", plot_metric))
+smooth_plot <- gratia::draw(fit_plot, select = "s(abs_turn)") +
+  ggtitle(paste("Turn dynamics:", plot_metric))
+smooth_plot
+ggsave(file.path(fig_dir, paste0("turn_dynamics_", plot_metric, ".png")),
+       smooth_plot, width = 9, height = 5, dpi = 300)
 ```
 
 ### 6.4 Topic effects by direction (model-based predictions)
@@ -253,7 +489,7 @@ excluding the smooth and random-effect terms. It gives direction-specific topic
 effects with standard errors.
 
 ```{r fig.height=12, fig.width=12}
-model_files <- list.files("gamm_models", pattern = "^gamm_.*\\.rds$", full.names = TRUE)
+model_files <- list.files(models_dir, pattern = "^gamm_.*\\.rds$", full.names = TRUE)
 
 topic_pred_list <- list()
 
@@ -299,7 +535,7 @@ top_topics <- topic_pred %>%
   slice_max(order_by = abs(estimate), n = 12, with_ties = FALSE) %>%
   ungroup()
 
-ggplot(top_topics, aes(x = estimate, y = reorder(topic_label, estimate))) +
+p_topic_dir <- ggplot(top_topics, aes(x = estimate, y = reorder(topic_label, estimate))) +
   geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
   geom_point() +
   geom_errorbarh(
@@ -315,6 +551,10 @@ ggplot(top_topics, aes(x = estimate, y = reorder(topic_label, estimate))) +
   ) +
   theme_minimal() +
   theme(axis.text.y = element_text(size = 7))
+
+p_topic_dir
+ggsave(file.path(fig_dir, "topic_effects_by_direction.png"), p_topic_dir,
+       width = 12, height = 12, dpi = 300)
 ```
 
 ### 6.5 Turn smooths across metrics
@@ -353,27 +593,30 @@ for (path in model_files) {
 
 smooth_all <- bind_rows(smooth_list)
 
-ggplot(smooth_all, aes(x = abs_turn, y = estimate)) +
+p_smooth_all <- ggplot(smooth_all, aes(x = abs_turn, y = estimate)) +
   geom_ribbon(aes(ymin = lower_ci, ymax = upper_ci), alpha = 0.2) +
   geom_line() +
-  facet_wrap(~ metric, scales = "free_y") +
+  facet_wrap(~ metric) +
   labs(
     title = "Turn-position dynamics across metrics",
     x = "Absolute turn index",
     y = "Smooth contribution (z)"
   ) +
   theme_minimal()
+
+p_smooth_all
+ggsave(file.path(fig_dir, "turn_dynamics_all_metrics.png"), p_smooth_all,
+       width = 12, height = 6, dpi = 300)
 ```
 
 ### 6.6 Topic-specific trajectories over turns (model-based)
 
 These trajectories show how alignment evolves over turns for a small set of
-high-frequency topics. Because the GAMM includes a single smooth for turns,
-the curves are parallel shifts across topics; any topic-specific temporal
-differences would require a smooth that varies by topic.
+high-frequency topics. With the topic-varying smooth in the GAMM, the curves
+can differ in shape across topics, capturing topic-specific temporal dynamics.
 
 ```{r fig.height=10, fig.width=12}
-top_topics_n <- 8
+top_topics_n <- 20
 
 topic_counts <- df_final %>%
   group_by(topic_label) %>%
@@ -413,6 +656,8 @@ for (path in model_files) {
 
   grid$estimate <- as.numeric(pred$fit)
   grid$std_error <- as.numeric(pred$se.fit)
+  grid$lower <- grid$estimate - 1.96 * grid$std_error
+  grid$upper <- grid$estimate + 1.96 * grid$std_error
   grid$metric <- metric
 
   trajectory_list[[metric]] <- grid
@@ -421,8 +666,10 @@ for (path in model_files) {
 traj_df <- bind_rows(trajectory_list) %>%
   mutate(direction = gsub("\\u2192", "->", as.character(direction)))
 
-ggplot(traj_df, aes(x = abs_turn, y = estimate, color = topic_label)) +
-  geom_line(alpha = 0.8) +
+p_topic_traj <- ggplot(traj_df, aes(x = abs_turn, y = estimate, color = topic_label, fill = topic_label)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray60", linewidth = 0.4) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.15, color = NA) +
+  geom_line(alpha = 0.9) +
   facet_grid(direction ~ metric, scales = "free_y") +
   labs(
     title = "Topic trajectories over turns (model-based)",
@@ -430,6 +677,98 @@ ggplot(traj_df, aes(x = abs_turn, y = estimate, color = topic_label)) +
     y = "Estimated alignment (z)",
     color = "Topic"
   ) +
+  coord_cartesian(clip = "off") +
   theme_minimal() +
-  theme(legend.position = "bottom")
+  theme(
+    legend.position = "bottom",
+    plot.margin = margin(5.5, 5.5, 5.5, 20)
+  ) +
+  guides(fill = "none")
+
+p_topic_traj
+ggsave(file.path(fig_dir, "topic_trajectories_over_turns.png"), p_topic_traj,
+       width = 12.5, height = 10, dpi = 300)
+```
+
+### 6.7 Topic-by-turn heatmap (model-based)
+
+```{r fig.height=10, fig.width=12}
+top_topics_n <- 20
+
+topic_counts <- df_final %>%
+  group_by(topic_label) %>%
+  summarise(n_convs = n_distinct(conv_id), .groups = "drop") %>%
+  arrange(desc(n_convs))
+
+top_topics <- topic_counts %>%
+  slice_head(n = top_topics_n) %>%
+  pull(topic_label)
+
+heat_list <- list()
+
+for (path in model_files) {
+  metric <- sub("^gamm_(.*)\\.rds$", "\\1", basename(path))
+  fit <- readRDS(path)
+  model_data <- fit$model
+
+  direction_levels <- levels(model_data$direction)
+  turn_grid <- sort(unique(model_data$abs_turn))
+
+  grid <- expand.grid(
+    abs_turn = turn_grid,
+    topic_label = top_topics,
+    direction = direction_levels,
+    stringsAsFactors = FALSE
+  )
+  grid$conv_id <- model_data$conv_id[1]
+
+  pred <- predict(
+    fit,
+    newdata = grid,
+    se.fit = FALSE,
+    type = "link",
+    exclude = "s(conv_id)"
+  )
+
+  grid$estimate <- as.numeric(pred)
+  grid$metric <- metric
+
+  grid_mean <- grid %>%
+    group_by(metric, topic_label, abs_turn) %>%
+    summarise(estimate = mean(estimate, na.rm = TRUE), .groups = "drop")
+
+  heat_list[[metric]] <- grid_mean
+}
+
+heat_df <- bind_rows(heat_list)
+
+topic_order <- heat_df %>%
+  filter(abs_turn %in% 1:3) %>%
+  group_by(topic_label) %>%
+  summarise(early_mean = mean(estimate, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(early_mean)) %>%
+  pull(topic_label)
+
+heat_df$topic_label <- factor(heat_df$topic_label, levels = topic_order)
+
+p_heat <- ggplot(heat_df, aes(x = abs_turn, y = topic_label, fill = estimate)) +
+  geom_tile() +
+  scale_fill_viridis_c() +
+  facet_wrap(~ metric, scales = "free_y") +
+  labs(
+    title = "Topic-by-turn heatmap (model-based)",
+    x = "Absolute turn index",
+    y = "Topic",
+    fill = "Estimated alignment (z)"
+  ) +
+  coord_cartesian(clip = "off") +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 7),
+    plot.margin = margin(5.5, 5.5, 5.5, 30)
+  )
+
+p_heat
+ggsave(file.path(fig_dir, "topic_turn_heatmap.png"), p_heat,
+       width = 12.5, height = 10, dpi = 300)
 ```

@@ -37,6 +37,19 @@ data/
 │   └── lsm_scores.csv
 ├── outputs/
 │   ├── merged.csv                # All features merged for analysis (from merge_all.py)
+│   ├── bayes/                    # Bayesian model outputs
+│   │   └── bayes_topic_alignment_outputs/ # brms models, diagnostics, PPCs
+│   │       ├── figures/
+│   │       ├── diagnostics/
+│   │       └── ppc/
+│   ├── gamm/                     # GAMM model outputs
+│   │   ├── gamm_models/          # .rds per metric
+│   │   ├── figures/              # Saved plots
+│   │   ├── gamm_summary.csv
+│   │   └── gamm_smooths.csv
+│   ├── other/                    # Misc analysis outputs
+│   │   ├── clustering_stability_report.csv
+│   │   └── topic_labels.csv
 │   └── topics/                   # Topic modeling outputs
 │       ├── conversations_with_topics.csv
 │       ├── combined_measures.csv

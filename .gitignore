@@ -40,7 +40,7 @@ data/**
 !data/outputs/topics/
 .bin/*
 
-
+src/alignment/.RDataTmp
 src/alignment/.Rhistory
 src/alignment/.RData
 src/alignment/*.csv

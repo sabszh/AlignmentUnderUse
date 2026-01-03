@@ -171,14 +171,14 @@ The cleaning script applies minimal destructive text normalization:
 
 **Compute semantic alignment (sentence embeddings):**
 ```bash
-python -m src.analysis.semantic_alignment
+python -m src.measures.semantic_alignment
 ```
 
 Computes semantic similarity using all-mpnet-base-v2 model. Creates turn pairs (user→assistant and assistant→user) and computes cosine similarity between sentence embeddings.
 
 **Compute sentiment alignment:**
 ```bash
-python -m src.analysis.sentiment_alignment
+python -m src.measures.sentiment_alignment
 ```
 
 Computes sentiment similarity using distilbert sentiment model. Maps sentiment to [-1, 1] polarity and computes similarity as `1 - |difference|/2`.
@@ -202,7 +202,7 @@ Computes sentiment similarity using distilbert sentiment model. Maps sentiment t
 Run the full analysis pipeline (semantic, sentiment, LSM, optional topics) and archive outputs:
 
 ```bash
-bash scripts/run_analysis_pipeline.sh \
+bash scripts/alignment_score_extraction.sh \
   data/processed/conversations_english.jsonl \
   data/derived \
   data/outputs \
@@ -262,7 +262,7 @@ Arguments (all optional, shown in order):
 - `--skip-language-filter` - Skip language detection
 - `--skip-markdown-cleaning` - Skip markdown normalization
 
-**Semantic Alignment (`src/analysis/semantic_alignment.py`):**
+**Semantic Alignment (`src/measures/semantic_alignment.py`):**
 - `--input PATH` - Input JSONL (default: `data/processed/conversations_english.jsonl`)
 - `--output PATH` - Output CSV (default: `data/derived/semantic_alignment.csv`)
 - `--model NAME` - Sentence transformer model (default: `all-mpnet-base-v2`)
@@ -270,7 +270,7 @@ Arguments (all optional, shown in order):
 - `--device auto|cpu|cuda` - Computation device (default: auto)
 - `--force-recompute` - Ignore cached embeddings
 
-**Sentiment Alignment (`src/analysis/sentiment_alignment.py`):**
+**Sentiment Alignment (`src/measures/sentiment_alignment.py`):**
 - `--input PATH` - Input CSV from semantic_alignment (default: `data/derived/semantic_alignment.csv`)
 - `--from-conversations PATH` - Alternatively load from conversations JSONL
 - `--output PATH` - Output CSV (default: `data/derived/sentiment_alignment.csv`)
@@ -331,8 +331,12 @@ To keep the repository clean while preserving a clear workflow, data artifacts a
   - conversations_english.jsonl, anonymized_conversations.jsonl, df_pairs.csv
 - derived: computed arrays and intermediate features
   - assistant_embeddings.npy, user_embeddings.npy, semantic_similarity.npy, message_sentiment.npy
-- outputs/topics: topic modeling outputs
-  - conversations_with_topics.csv, topic_distributions.png, combined_measures.csv
+- outputs: analysis outputs and merged datasets
+  - merged.csv (merged features from `merge_all.py`)
+  - outputs/bayes: Bayesian model outputs
+  - outputs/gamm: GAMM model outputs
+  - outputs/other: misc analysis outputs
+  - outputs/topics: topic modeling outputs
 
 Only `data/README.md` is tracked in Git; all other files are ignored via `.gitignore`.
 
@@ -341,7 +345,7 @@ Only `data/README.md` is tracked in Git; all other files are ignored via `.gitig
 Run the KeyNMF pipeline over user-only, assistant-only, and combined documents:
 
 ```bash
-python -m src.analysis.topic_modeling --input data/processed/conversations_english.jsonl --keywords 9 --plot
+python -m src.measures.topic_modeling --input data/processed/conversations_english.jsonl --keywords 9 --plot
 ```
 
 Outputs are saved to `data/outputs/topics/`.
@@ -351,8 +355,8 @@ Outputs are saved to `data/outputs/topics/`.
 Compute linguistic style matching scores between sequential user-assistant message pairs:
 
 ```bash
-python -m src.analysis.lsm_scoring
-python -m src.analysis.lsm_scoring --input data/processed/conversations_english.jsonl --output data/derived/lsm_scores.csv
+python -m src.measures.lsm_scoring
+python -m src.measures.lsm_scoring --input data/processed/conversations_english.jsonl --output data/derived/lsm_scores.csv
 ```
 
 LSM measures linguistic alignment across functional word categories: articles, prepositions, pronouns, auxiliary verbs, conjunctions, negations, and common adverbs. No filtering is applied; all conversations are processed.
@@ -541,12 +545,15 @@ This project is designed for research reproducibility:
 ```
 AlignmentUnderUse/
 ├── src/
-│   ├── analysis/
+│   ├── alignment/
+│   │   ├── bayes_topic_alignment.Rmd # Bayesian topic alignment
+│   │   ├── gamm_modeling.Rmd         # GAMM alignment analysis
+│   │   └── merge_all.py              # Merge outputs for downstream analysis
+│   ├── measures/
 │   │   ├── topic_modeling.py        # Three-model KeyNMF pipeline
 │   │   ├── semantic_alignment.py    # Semantic similarity (sentence embeddings)
 │   │   ├── sentiment_alignment.py   # Sentiment similarity
-│   │   ├── lsm_scoring.py           # Linguistic style matching
-│   │   └── merge_all.py             # Merge outputs for downstream analysis
+│   │   └── lsm_scoring.py           # Linguistic style matching
 │   ├── collection/
 │   │   ├── arctic_shift_api.py      # Arctic Shift API client (posts + comments)
 │   │   ├── collect_reddit_posts.py  # Stage 1: Reddit post collection
@@ -576,12 +583,22 @@ AlignmentUnderUse/
 │   │   ├── message_sentiment.npy
 │   │   └── message_ids_sentiment.npy
 │   └── outputs/
+│       ├── merged.csv
+│       ├── bayes/
+│       │   └── bayes_topic_alignment_outputs/
+│       │       ├── figures/
+│       │       ├── diagnostics/
+│       │       └── ppc/
+│       ├── gamm/
+│       │   ├── figures/
+│       │   └── gamm_models/
+│       ├── other/
 │       └── topics/
 │           ├── conversations_with_topics.csv
 │           ├── topic_distributions.png
 │           └── combined_measures.csv
 └── scripts/
-    └── run_analysis_pipeline.sh     # End-to-end analysis runner
+    └── alignment_score_extraction.sh # End-to-end alignment score extraction
 ```
 
 ## Data Availability & Ethics
