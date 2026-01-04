@@ -756,9 +756,9 @@ If you use this project in your research, please cite it as follows:
 ```bibtex
 @software{alignment_under_use,
   title = {Alignment Under Use: Analyzing ChatGPT Usage Patterns Through Shared Conversations},
-  author = {Your Name},
-  year = {2025},
-  url = {https://github.com/yourusername/AlignmentUnderUse},
+  author = {Gloria Stvol & Sabrina Zaki},
+  year = {2026},
+  url = {https://github.com/sabszh/AlignmentUnderUse},
   note = {Open-source research pipeline}
 }
 ```
@@ -798,18 +798,11 @@ For substantial changes, please open an issue first to discuss proposed modifica
    - Python version and OS
    - Relevant output from running the command
 
-## Additional Resources
-
-- **Papers & Research:** [Link to published findings if available]
-- **Data Documentation:** See [data/README.md](data/README.md) for detailed data format specifications
-- **Related Work:** [Links to related alignment/discourse analysis projects]
-
 ## Acknowledgments
 
 - **Arctic Shift** - Historical Reddit data archive
 - **OpenAI** - ChatGPT conversation sharing feature and backend API
 - **Hugging Face** - Pre-trained models (sentence-transformers, transformers)
-- **Research Community** - Feedback and contributions
 
 ---
 
