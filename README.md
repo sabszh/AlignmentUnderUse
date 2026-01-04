@@ -2,6 +2,10 @@
 
 Research project investigating how ChatGPT is used in practice through shared conversation analysis.
 
+**Figure 1** Overview of Alignment Under Use pipeline
+![image](data\img\figure_1.png)
+
+
 ## Overview
 
 This project collects and analyzes publicly shared ChatGPT conversations from Reddit to understand real-world usage patterns, interaction styles, and alignment in practice. 
@@ -101,6 +105,7 @@ export CHATGPT_COOKIE="your_cookie"
 ```
 
 **Note:** Cookies expire periodically. Refresh if you get HTTP 403 errors.
+If you only have a Cloudflare clearance token, set `CF_CLEARANCE` instead of `CHATGPT_COOKIE`.
 
 ## Usage
 
@@ -166,6 +171,8 @@ The cleaning script applies minimal destructive text normalization:
 --skip-language-filter       # Skip language detection
 --skip-markdown-cleaning     # Skip markdown cleaning
 ```
+**Figure 2** Overview of data collection and cleaning
+![image](data\img\figure_2.png)
 
 ### Alignment Analysis
 
@@ -224,6 +231,8 @@ Arguments (all optional, shown in order):
 - `--comments-only` - Only run Reddit comments collection
 - `--conversations-only` - Only run conversation collection
 - `--limit N` - Limit conversations to fetch
+- `--max-pages N` - Max pages to fetch for Reddit posts (default: 1)
+- `--continue` - Continue Reddit post pagination from last post
 - `--max-comments-posts N` - Limit posts to process for comments
 - `--comments-delay N` - Delay between comment API requests (default: 0.5s)
 - `--resume` - Resume from previous run
@@ -265,6 +274,7 @@ Arguments (all optional, shown in order):
 **Semantic Alignment (`src/measures/semantic_alignment.py`):**
 - `--input PATH` - Input JSONL (default: `data/processed/conversations_english.jsonl`)
 - `--output PATH` - Output CSV (default: `data/derived/semantic_alignment.csv`)
+- `--embeddings-cache-dir PATH` - Directory for cached embeddings (default: `data/derived`)
 - `--model NAME` - Sentence transformer model (default: `all-mpnet-base-v2`)
 - `--batch-size N` - Batch size (default: 256)
 - `--device auto|cpu|cuda` - Computation device (default: auto)
@@ -273,8 +283,12 @@ Arguments (all optional, shown in order):
 **Sentiment Alignment (`src/measures/sentiment_alignment.py`):**
 - `--input PATH` - Input CSV from semantic_alignment (default: `data/derived/semantic_alignment.csv`)
 - `--from-conversations PATH` - Alternatively load from conversations JSONL
+- `--conversations PATH` - Conversations JSONL to load text for missing columns
 - `--output PATH` - Output CSV (default: `data/derived/sentiment_alignment.csv`)
+- `--cache-dir PATH` - Directory for cached sentiment scores (default: `data/derived`)
 - `--model NAME` - Sentiment model (default: `distilbert-base-uncased-finetuned-sst-2-english`)
+- `--batch-size N` - Batch size (default: 64)
+- `--device auto|cpu|cuda` - Computation device (default: auto)
 - `--force-recompute` - Ignore cached sentiment scores
 
 ## Output Schema
@@ -330,7 +344,8 @@ To keep the repository clean while preserving a clear workflow, data artifacts a
 - processed: cleaned, curated datasets ready for analysis
   - conversations_english.jsonl, anonymized_conversations.jsonl, df_pairs.csv
 - derived: computed arrays and intermediate features
-  - assistant_embeddings.npy, user_embeddings.npy, semantic_similarity.npy, message_sentiment.npy
+  - message_embeddings.npy, message_ids.npy, message_sentiment.npy, message_ids_sentiment.npy
+  - semantic_alignment.csv, sentiment_alignment.csv, lsm_scores.csv
 - outputs: analysis outputs and merged datasets
   - merged.csv (merged features from `merge_all.py`)
   - outputs/bayes: Bayesian model outputs
@@ -348,7 +363,10 @@ Run the KeyNMF pipeline over user-only, assistant-only, and combined documents:
 python -m src.measures.topic_modeling --input data/processed/conversations_english.jsonl --keywords 9 --plot
 ```
 
-Outputs are saved to `data/outputs/topics/`.
+Outputs are saved to `data/outputs/topics/`. Common options:
+- `--output-dir PATH` - Output directory (default: `data/outputs/topics`)
+- `--topics N` - Topics per model (default: 30)
+- `--max-chars-per-doc N` - Truncate long documents (default: 20000)
 
 ## Linguistic Style Matching (LSM)
 
@@ -363,9 +381,34 @@ LSM measures linguistic alignment across functional word categories: articles, p
 
 Output is saved to `data/derived/lsm_scores.csv` with columns: `conv_id`, `turn`, `lsm_score`.
 
+## Lexical + Syntactic Alignment (LexSyn)
+
+Compute lexical (word overlap) and syntactic (POS tag overlap) alignment per turn pair:
+
+```bash
+python -m src.measures.lexsyn_alignment --input data/processed/conversations_english.jsonl --output data/derived/lexsyn_alignment.csv
+```
+
+Requires spaCy and the English model:
+```bash
+pip install spacy
+python -m spacy download en_core_web_sm
+```
+
 ## Combined Analysis
 
-Use `analysis/testing/combined_analysis.ipynb` to merge topic assignments with sentiment aggregates and LSM scores to produce plots. It writes `combined_measures.csv` under `data/outputs/topics/`.
+To merge topic assignments with sentiment and LSM outputs, use `src/alignment/merge_all.py` and write a combined CSV:
+
+```bash
+python -m src.alignment.merge_all \
+  --conv data/processed/conversations_english.jsonl \
+  --lsm data/derived/lsm_scores.csv \
+  --sentiment data/derived/sentiment_alignment.csv \
+  --semantic data/derived/semantic_alignment.csv \
+  --lexsyn data/derived/lexsyn_alignment.csv \
+  --topics data/outputs/topics/conversations_with_topics.csv \
+  --output data/outputs/merged.csv
+```
 
 **Note:** The `share_urls` field contains all ChatGPT share URLs extracted from the comment body. The pattern matches various URL formats:
 - `https://chatgpt.com/share/...`
@@ -504,7 +547,7 @@ This project is designed for research reproducibility:
    - Open browser DevTools (F12) → Network tab
    - Refresh page, select any request
    - Copy full `Cookie:` header value
-   - Set `CHATGPT_COOKIE` environment variable
+   - Set `CHATGPT_COOKIE` environment variable (or `CF_CLEARANCE` if you only have the Cloudflare token)
 
 3. **Run collection:**
    ```bash
@@ -577,11 +620,13 @@ AlignmentUnderUse/
 │   │   ├── conversations_english.jsonl
 │   │   └── anonymized_conversations.jsonl
 │   ├── derived/                     # Computed arrays and intermediate features
-│   │   ├── assistant_embeddings.npy
-│   │   ├── user_embeddings.npy
-│   │   ├── semantic_similarity.npy
+│   │   ├── message_embeddings.npy
+│   │   ├── message_ids.npy
 │   │   ├── message_sentiment.npy
-│   │   └── message_ids_sentiment.npy
+│   │   ├── message_ids_sentiment.npy
+│   │   ├── semantic_alignment.csv
+│   │   ├── sentiment_alignment.csv
+│   │   └── lsm_scores.csv
 │   └── outputs/
 │       ├── merged.csv
 │       ├── bayes/

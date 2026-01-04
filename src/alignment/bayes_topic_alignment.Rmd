@@ -22,6 +22,7 @@ pacman::p_load(
   tidybayes,
   posterior,
   bayesplot,
+  ggdist,
   pheatmap,
   dendextend
 )
@@ -38,6 +39,14 @@ metrics_list <- c(
   "lsm_score",
   "semantic_similarity",
   "sentiment_similarity"
+)
+
+metric_labels <- c(
+  lexical_jaccard = "Lexical Alignment",
+  pos_jaccard = "Syntactic Alignment",
+  lsm_score = "Linguistic Style Matching",
+  semantic_similarity = "Semantic Alignment",
+  sentiment_similarity = "Sentiment Alignment"
 )
 
 # Topic-only model with conversation random intercept
@@ -100,9 +109,12 @@ brm_base_args <- list(
 df <- read_csv("../../data/outputs/merged.csv", show_col_types = FALSE)
 
 df_clean <- df %>%
-  select(conv_id, combined_topic_id, combined_keywords, all_of(metrics_list)) %>%
-  drop_na(all_of(metrics_list), combined_topic_id, conv_id, combined_keywords) %>%
-  mutate(conv_id = as.factor(conv_id))
+  select(conv_id, combined_topic_id, combined_keywords, turn, all_of(metrics_list)) %>%
+  drop_na(all_of(metrics_list), combined_topic_id, conv_id, combined_keywords, turn) %>%
+  mutate(
+    conv_id = as.factor(conv_id),
+    abs_turn = abs(as.numeric(turn))
+  )
 
 # Filter A: conversation length outliers
 conv_stats <- df_clean %>%
@@ -146,7 +158,184 @@ df_z <- df_final %>%
   mutate(across(all_of(metrics_list), ~ as.numeric(scale(.))))
 ```
 
-## 4) Fit models (one per metric)
+## 4) Metric correlations (post-normalization)
+
+This provides a quick check of how alignment metrics co-vary after z-scoring.
+
+```{r}
+metric_summary <- df_z %>%
+  summarise(across(
+    all_of(metrics_list),
+    list(min = ~ min(.x, na.rm = TRUE),
+         max = ~ max(.x, na.rm = TRUE),
+         sd = ~ sd(.x, na.rm = TRUE),
+         range = ~ diff(range(.x, na.rm = TRUE)))
+  )) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = c("metric", ".value"),
+    names_pattern = "^(.*)_(min|max|sd)$"
+  ) %>%
+  mutate(metric_label = metric_labels[metric]) %>%
+  relocate(metric_label, .after = metric)
+
+write_csv(metric_summary, file.path(output_dir, "metric_summary_min_max_sd.csv"))
+metric_summary
+```
+
+
+```{r}
+cor_df <- df_z %>% select(all_of(metrics_list))
+
+cor_mat <- cor(cor_df, use = "pairwise.complete.obs")
+
+p_mat <- matrix(NA_real_, nrow = length(metrics_list), ncol = length(metrics_list),
+                dimnames = list(metrics_list, metrics_list))
+for (i in seq_along(metrics_list)) {
+  for (j in seq_along(metrics_list)) {
+    x <- cor_df[[metrics_list[i]]]
+    y <- cor_df[[metrics_list[j]]]
+    ok <- is.finite(x) & is.finite(y)
+    if (sum(ok) > 2) {
+      p_mat[i, j] <- cor.test(x[ok], y[ok])$p.value
+    }
+  }
+}
+
+cor_mat
+p_mat
+
+output_dir <- "../../data/outputs/bayes/bayes_topic_alignment_outputs"
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+write_csv(as.data.frame(cor_mat), file.path(output_dir, "metric_correlations.csv"))
+write_csv(as.data.frame(p_mat), file.path(output_dir, "metric_correlations_pvalues.csv"))
+```
+
+## 5) Rolling metric correlations over turns
+
+This computes rolling Pearson correlations across turns to smooth
+turn-level noise. The window size is configurable.
+
+```{r}
+output_dir <- "../../data/outputs/bayes/bayes_topic_alignment_outputs"
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+
+roll_window <- 5
+
+cor_pairs <- expand.grid(
+  metric_x = metrics_list,
+  metric_y = metrics_list,
+  stringsAsFactors = FALSE
+) %>%
+  filter(metric_x < metric_y)
+
+cor_by_turn <- df_filtered %>%
+  select(abs_turn, all_of(metrics_list)) %>%
+  group_by(abs_turn) %>%
+  summarise(across(all_of(metrics_list), ~ mean(.x, na.rm = TRUE)), .groups = "drop") %>%
+  arrange(abs_turn)
+
+roll_cor_list <- list()
+turns <- cor_by_turn$abs_turn
+
+for (i in seq_len(nrow(cor_pairs))) {
+  m1 <- cor_pairs$metric_x[i]
+  m2 <- cor_pairs$metric_y[i]
+  x <- cor_by_turn[[m1]]
+  y <- cor_by_turn[[m2]]
+
+  roll_vals <- rep(NA_real_, length(turns))
+  for (t in seq_along(turns)) {
+    start_idx <- max(1, t - roll_window + 1)
+    idx <- start_idx:t
+    ok <- is.finite(x[idx]) & is.finite(y[idx])
+    if (sum(ok) >= 3) {
+      roll_vals[t] <- cor(x[idx][ok], y[idx][ok], method = "pearson")
+    }
+  }
+
+  roll_cor_list[[i]] <- tibble(
+    abs_turn = turns,
+    metric_x = m1,
+    metric_y = m2,
+    correlation = roll_vals
+  )
+}
+
+roll_cor <- bind_rows(roll_cor_list)
+
+write_csv(roll_cor, file.path(output_dir, "metric_correlations_rolling.csv"))
+roll_cor %>% head(10)
+```
+
+### 5.1) Rolling correlation summary
+
+```{r}
+roll_summary <- roll_cor %>%
+  group_by(metric_x, metric_y) %>%
+  summarise(
+    mean_r = mean(correlation, na.rm = TRUE),
+    sd_r = sd(correlation, na.rm = TRUE),
+    min_r = min(correlation, na.rm = TRUE),
+    max_r = max(correlation, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_r))
+
+write_csv(roll_summary, file.path(output_dir, "metric_correlations_rolling_summary.csv"))
+roll_summary
+```
+
+### 5.2) Rolling correlation trajectories
+
+```{r fig.height=7, fig.width=10}
+roll_cor_plot <- roll_cor %>%
+  mutate(
+    metric_x_label = metric_labels[metric_x],
+    metric_y_label = metric_labels[metric_y]
+  )
+
+p_roll_cor <- ggplot(roll_cor_plot, aes(x = abs_turn, y = correlation, color = metric_y_label)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray60", linewidth = 0.4) +
+  geom_line(alpha = 0.8) +
+  facet_wrap(~ metric_x_label, scales = "free_y") +
+  labs(
+    title = paste0("Rolling metric correlations over turns (window = ", roll_window, ")"),
+    x = "Absolute turn index",
+    y = "Correlation (r)",
+    color = "Metric Y"
+  ) +
+  theme_minimal()
+
+p_roll_cor
+ggsave(file.path(output_dir, "metric_correlations_rolling.png"), p_roll_cor,
+       width = 10, height = 7, dpi = 300)
+```
+
+### 5.3) Additional rolling correlation summaries
+
+```{r}
+roll_stats <- roll_cor %>%
+  group_by(metric_x, metric_y) %>%
+  summarise(
+    mean_r = mean(correlation, na.rm = TRUE),
+    sd_r = sd(correlation, na.rm = TRUE),
+    p_abs_gt_0_3 = mean(abs(correlation) > 0.3, na.rm = TRUE),
+    p_abs_gt_0_5 = mean(abs(correlation) > 0.5, na.rm = TRUE),
+    slope = if (sum(is.finite(correlation)) > 2) {
+      coef(lm(correlation ~ abs_turn, data = cur_data()))[[2]]
+    } else {
+      NA_real_
+    },
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_r))
+
+write_csv(roll_stats, file.path(output_dir, "metric_correlations_rolling_stats.csv"))
+roll_stats
+```
+
+## 6) Fit models (one per metric)
 
 Outputs (under data/outputs/bayes):
 - bayes_topics_draws.csv
@@ -180,6 +369,11 @@ dir.create(resid_dir, showWarnings = FALSE, recursive = TRUE)
 
 
 ```{r}
+skip_fit <- TRUE
+```
+
+```{r}
+if (!skip_fit) {
 for (metric in metrics_list) {
 
   cat("\n===================================================\n")
@@ -221,6 +415,36 @@ for (metric in metrics_list) {
     ess_min_fixed = as.numeric(ess_min)
   )
 
+  # Trace plots (subset to keep files readable)
+  draws_array <- as_draws_array(fit)
+  all_vars <- variables(draws_array)
+  topic_vars <- all_vars[str_detect(all_vars, "^b_topic_label")]
+  trace_topic_vars <- head(topic_vars, 12)
+  if (length(trace_topic_vars) > 0) {
+    trace_plot <- mcmc_trace(draws_array, pars = trace_topic_vars) +
+      ggtitle(paste("Trace plots (topic effects subset) -", metric_labels[metric]))
+    ggsave(
+      filename = file.path(diag_dir, paste0("trace_topics_", metric, ".png")),
+      plot = trace_plot,
+      width = 12,
+      height = 8,
+      dpi = 300
+    )
+  }
+
+  other_vars <- all_vars[str_detect(all_vars, "^(sd_|sigma)")]
+  if (length(other_vars) > 0) {
+    trace_plot_other <- mcmc_trace(draws_array, pars = other_vars) +
+      ggtitle(paste("Trace plots (variance terms) -", metric_labels[metric]))
+    ggsave(
+      filename = file.path(diag_dir, paste0("trace_variance_", metric, ".png")),
+      plot = trace_plot_other,
+      width = 10,
+      height = 6,
+      dpi = 300
+    )
+  }
+
   # Hierarchical stats
   vc <- VarCorr(fit)
   conv_sd <- vc$conv_id$sd[1]
@@ -256,7 +480,7 @@ for (metric in metrics_list) {
 
   # Posterior predictive check
   ppc_plot <- pp_check(fit, ndraws = 100, type = "dens_overlay") +
-    ggtitle(paste("Posterior predictive check -", metric))
+    ggtitle(paste("Posterior predictive check -", metric_labels[metric]))
   png(filename = file.path(ppc_dir, paste0("bayes_topics_ppc_", metric, ".png")), width = 1000, height = 700)
   print(ppc_plot)
   dev.off()
@@ -266,14 +490,18 @@ for (metric in metrics_list) {
 
   cat("DONE:", metric, "\n")
 }
+}
 ```
 
-## 5) PPCs only (from saved models)
+## 7) PPCs only (from saved models)
 
 Run this section independently to regenerate posterior predictive checks
 without refitting models.
 
 ```{r}
+topic_plots <- list()
+var_plots <- list()
+
 for (metric in metrics_list) {
   model_path <- file.path(models_dir, paste0("brm_", metric, ".rds"))
   if (!file.exists(model_path)) {
@@ -283,7 +511,7 @@ for (metric in metrics_list) {
 
   fit <- readRDS(model_path)
   ppc_plot <- pp_check(fit, ndraws = 100, type = "dens_overlay") +
-    ggtitle(paste("Posterior predictive check -", metric))
+    ggtitle(paste("Posterior predictive check -", metric_labels[metric]))
 
   png(filename = file.path(ppc_dir, paste0("bayes_topics_ppc_", metric, ".png")),
       width = 1000, height = 700)
@@ -295,7 +523,98 @@ for (metric in metrics_list) {
 }
 ```
 
-## 6) Topic effects plot
+## 7b) Trace plots only (from saved models)
+
+Run this section independently to regenerate trace plots without refitting models.
+
+```{r}
+for (metric in metrics_list) {
+  model_path <- file.path(models_dir, paste0("brm_", metric, ".rds"))
+  if (!file.exists(model_path)) {
+    warning("Missing model file for metric: ", metric)
+    next
+  }
+
+  fit <- readRDS(model_path)
+  draws_array <- as_draws_array(fit)
+  all_vars <- variables(draws_array)
+  topic_vars <- all_vars[str_detect(all_vars, "^b_topic_label")]
+  trace_topic_vars <- head(topic_vars, 12)
+  if (length(trace_topic_vars) > 0) {
+    trace_plot <- mcmc_trace(draws_array, pars = trace_topic_vars) +
+      ggtitle(paste("Trace plots (topic effects subset) -", metric_labels[metric]))
+    ggsave(
+      filename = file.path(diag_dir, paste0("trace_topics_", metric, ".png")),
+      plot = trace_plot,
+      width = 12,
+      height = 8,
+      dpi = 300
+    )
+    topic_plots[[metric]] <- trace_plot
+  }
+
+  other_vars <- all_vars[str_detect(all_vars, "^(sd_|sigma)")]
+  if (length(other_vars) > 0) {
+    trace_plot_other <- mcmc_trace(draws_array, pars = other_vars) +
+      ggtitle(paste("Trace plots (variance terms) -", metric_labels[metric]))
+    ggsave(
+      filename = file.path(diag_dir, paste0("trace_variance_", metric, ".png")),
+      plot = trace_plot_other,
+      width = 10,
+      height = 6,
+      dpi = 300
+    )
+    var_plots[[metric]] <- trace_plot_other
+  }
+
+  rm(fit, draws_array)
+  gc()
+}
+
+if (length(topic_plots) > 0) {
+  ncol <- 2
+  nrow <- ceiling(length(topic_plots) / ncol)
+  png(
+    filename = file.path(diag_dir, "trace_topics_grid.png"),
+    width = 1200 * ncol,
+    height = 900 * nrow,
+    res = 150
+  )
+  grid::grid.newpage()
+  grid::pushViewport(grid::viewport(layout = grid::grid.layout(nrow, ncol)))
+  i <- 1
+  for (p in topic_plots) {
+    row <- ceiling(i / ncol)
+    col <- i - (row - 1) * ncol
+    print(p, vp = grid::viewport(layout.pos.row = row, layout.pos.col = col))
+    i <- i + 1
+  }
+  dev.off()
+}
+
+if (length(var_plots) > 0) {
+  ncol <- 2
+  nrow <- ceiling(length(var_plots) / ncol)
+  png(
+    filename = file.path(diag_dir, "trace_variance_grid.png"),
+    width = 1100 * ncol,
+    height = 800 * nrow,
+    res = 150
+  )
+  grid::grid.newpage()
+  grid::pushViewport(grid::viewport(layout = grid::grid.layout(nrow, ncol)))
+  i <- 1
+  for (p in var_plots) {
+    row <- ceiling(i / ncol)
+    col <- i - (row - 1) * ncol
+    print(p, vp = grid::viewport(layout.pos.row = row, layout.pos.col = col))
+    i <- i + 1
+  }
+  dev.off()
+}
+```
+
+## 8) Topic effects plot
 
 ```{r fig.height=12, fig.width=12}
 topic_draws <- read_csv(file.path(output_dir, "bayes_topics_draws.csv"), show_col_types = FALSE)
@@ -305,39 +624,80 @@ topic_summ <- topic_draws %>%
   median_qi(value, .width = 0.89) %>%
   ungroup()
 
-topic_summ <- topic_summ %>%
-  group_by(metric) %>%
-  mutate(topic_clean = fct_reorder(topic_clean, value)) %>%
-  ungroup()
+topic_plot_df <- topic_draws %>%
+  left_join(
+    topic_info %>%
+      mutate(
+        topic_label_model = topic_label %>%
+          str_to_lower() %>%
+          str_replace_all("[^a-z0-9=]", "") %>%
+          str_replace_all("=", "EQ")
+      ) %>%
+      select(topic_label, topic_label_model, n_convs),
+    by = c("topic_clean" = "topic_label_model")
+  ) %>%
+  mutate(
+    metric_label = metric_labels[metric],
+    topic_label = case_when(
+      !is.na(topic_label) ~ topic_label,
+      !is.na(n_convs) ~ paste0(topic_clean, " (n=", n_convs, ")"),
+      TRUE ~ topic_clean
+    ),
+    topic_label = str_replace(topic_label, "EQ55", "...")
+  )
+
+topic_order <- topic_plot_df %>%
+  group_by(topic_label) %>%
+  summarise(overall_median = median(value), .groups = "drop") %>%
+  arrange(overall_median) %>%
+  pull(topic_label)
+
+topic_plot_df$topic_label <- factor(topic_plot_df$topic_label, levels = topic_order)
 
 ```
 
-```{r fig.height=10, fig.width=12}
+```{r fig.height=10, fig.width=13}
 # Save the primary topic effects plot
-p_topic_effects <- ggplot(topic_summ, aes(x = value, y = topic_clean)) +
+p_topic_effects <- ggplot(
+  topic_plot_df,
+  aes(
+    x = value,
+    y = topic_label,
+    fill = metric_label,
+    group = topic_label
+  )
+) +
   geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
-  ggdist::geom_pointinterval(
-    aes(xmin = .lower, xmax = .upper),
-    size = 0.3
+  ggdist::stat_halfeye(
+    point_interval = median_qi,
+    .width = 0.89,
+    slab_alpha = 0.35,
+    slab_size = 0.5,
+    interval_size = 0.8,
+    point_size = 1.6,
+    color = "gray30"
   ) +
-  facet_wrap(~metric, scales = "free_y") +
+  facet_grid(. ~ metric_label) +
   labs(
-    title = "Topic effects with 89 percent intervals",
+    title = "Topic effects on alignment metrics (posterior density + median)",
     x = "Posterior effect on standardized alignment (z)",
     y = NULL
   ) +
-  theme_bw() +
+  theme_minimal(base_size = 14) +
   theme(
-    strip.text = element_text(face = "bold"),
-    axis.text.y = element_text(size = 7)
+    plot.title = element_text(size = 16, face = "bold"),
+    strip.text = element_text(size = 12, face = "bold"),
+    axis.text.y = element_text(size = 10),
+    axis.text.x = element_text(size = 11),
+    legend.position = "none"
   )
 
 p_topic_effects
 ggsave(file.path(fig_dir, "topic_effects_pointinterval.png"), p_topic_effects,
-       width = 12, height = 10, dpi = 300)
+       width = 13, height = 10, dpi = 300)
 ```
 
-## 6.1) Summary tables and core figures
+## 8.1) Summary tables and core figures
 
 ```{r}
 # Summary table: topic effects with probabilities and intervals
@@ -392,7 +752,7 @@ write_csv(top_by_p_pos, file.path(tables_dir, "top_topics_by_p_pos.csv"))
 topic_effects_summary %>% head(10)
 ```
 
-## 7) Diagnostic checklist
+## 9) Diagnostic checklist
 
 ```{r}
 pacman::p_load(brms, posterior,bayesplot,tidyverse)
@@ -463,12 +823,38 @@ if (nrow(topic_matrix_scaled) > 1 && ncol(topic_matrix_scaled) > 1) {
   col_clusters <- factor(col_clusters, levels = sort(unique(col_clusters)))
   annotation_col <- data.frame(Metrics = col_clusters)
   rownames(annotation_col) <- colnames(topic_matrix_scaled)
+  col_labels <- metric_labels[colnames(topic_matrix_scaled)]
+  col_labels[is.na(col_labels)] <- colnames(topic_matrix_scaled)[is.na(col_labels)]
   cluster_colors <- setNames(
     c("#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e")[seq_along(levels(col_clusters))],
     levels(col_clusters)
   )
   annotation_colors <- list(Metrics = cluster_colors)
-  row_labels <- stringr::str_wrap(rownames(topic_matrix_scaled), width = 18)
+  row_labels <- metric_labels[rownames(topic_matrix_scaled)]
+  row_labels[is.na(row_labels)] <- rownames(topic_matrix_scaled)[is.na(row_labels)]
+  row_labels <- stringr::str_wrap(row_labels, width = 18)
+
+  topic_label_lookup <- topic_info %>%
+    mutate(
+      topic_label_model = topic_label %>%
+        str_to_lower() %>%
+        str_replace_all("[^a-z0-9=]", "") %>%
+        str_replace_all("=", "EQ")
+    ) %>%
+    select(topic_label_model, topic_label)
+
+  topic_cluster_df <- tibble(
+    topic_clean = names(col_clusters),
+    topic_cluster = as.character(col_clusters)
+  ) %>%
+    left_join(topic_label_lookup, by = c("topic_clean" = "topic_label_model")) %>%
+    mutate(topic_label = if_else(is.na(topic_label), topic_clean, topic_label))
+
+  write_csv(topic_cluster_df, file.path(tables_dir, "topic_cluster_assignments.csv"))
+  write_csv(
+    tibble(topic_cluster = names(cluster_colors), color = unname(cluster_colors)),
+    file.path(tables_dir, "topic_cluster_colors.csv")
+  )
   p_heatmap <- pheatmap::pheatmap(
     topic_matrix_scaled,
     breaks = heatmap_breaks,

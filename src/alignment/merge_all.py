@@ -20,7 +20,7 @@ Example usage:
         --sentiment data/derived/sentiment_alignment.csv \
         --semantic data/derived/semantic_alignment.csv \
         --lexsyn data/derived/lexsyn_alignment.csv \
-        --topics data/outputs/conversations_with_topics.csv \
+        --topics data/outputs/topics/conversations_with_topics.csv \
         --output data/outputs/merged.csv
 
 The script expects the turn structure and cross-check logic to match between the sources for correct merging.

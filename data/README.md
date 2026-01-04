@@ -30,10 +30,12 @@ data/
 │   ├── anonymized_conversations.jsonl
 │   └── df_pairs.csv
 ├── derived/                      # Computed arrays and features
-│   ├── assistant_embeddings.npy
-│   ├── user_embeddings.npy
-│   ├── semantic_similarity.npy
+│   ├── message_embeddings.npy
+│   ├── message_ids.npy
 │   ├── message_sentiment.npy
+│   ├── message_ids_sentiment.npy
+│   ├── semantic_alignment.csv
+│   ├── sentiment_alignment.csv
 │   └── lsm_scores.csv
 ├── outputs/
 │   ├── merged.csv                # All features merged for analysis (from merge_all.py)

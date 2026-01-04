@@ -18,7 +18,8 @@ pacman::p_load(
   tidyverse,
   readr,
   mgcv,
-  gratia
+  gratia,
+  ggh4x
 )
 ```
 
@@ -36,13 +37,29 @@ metrics_list <- c(
   "sentiment_similarity"
 )
 
+metric_labels <- c(
+  lexical_jaccard = "Lexical Alignment",
+  pos_jaccard = "Syntactic Alignment",
+  lsm_score = "Linguistic Style Matching",
+  semantic_similarity = "Semantic Alignment",
+  sentiment_similarity = "Sentiment Alignment"
+)
+
 # Keep only rows with required fields
 df_clean <- df %>%
   drop_na(all_of(metrics_list), combined_topic_id, direction, turn, conv_id, combined_keywords) %>%
   mutate(
     abs_turn = abs(turn),
     direction = as.factor(direction),
-    conv_id = as.factor(conv_id)
+    conv_id = as.factor(conv_id),
+    model_family = case_when(
+      is.na(model_slug) ~ "other",
+      str_detect(model_slug, "^gpt-4") ~ "gpt-4",
+      str_detect(model_slug, "^gpt-5") ~ "gpt-5",
+      str_detect(model_slug, "^o") ~ "o",
+      TRUE ~ "other"
+    ),
+    model_family = factor(model_family, levels = c("gpt-4", "gpt-5", "o", "other"))
   )
 
 # Filter A: conversation length outliers
@@ -74,6 +91,150 @@ df_filtered <- df_filtered %>%
 cat("Final N rows:", nrow(df_filtered), "\n")
 cat("N conversations:", n_distinct(df_filtered$conv_id), "\n")
 cat("Turn range:", min(df_filtered$abs_turn), "to", max(df_filtered$abs_turn), "\n")
+```
+
+## 1b) Summary stats
+
+```{r}
+raw_conv_path <- "../../data/raw/conversations.jsonl"
+raw_conv_count <- if (file.exists(raw_conv_path)) {
+  length(readLines(raw_conv_path, warn = FALSE))
+} else {
+  NA_integer_
+}
+
+to_flag <- function(x) {
+  if (is.logical(x)) {
+    return(x)
+  }
+  vals <- tolower(as.character(x))
+  vals %in% c("true", "t", "1", "yes")
+}
+
+has_tools_flag <- function(x) {
+  if (is.null(x)) {
+    return(FALSE)
+  }
+  if (is.list(x)) {
+    return(length(x) > 0)
+  }
+  s <- str_trim(as.character(x))
+  if (is.na(s) || s == "" || s == "[]" || s == "na" || s == "null") {
+    return(FALSE)
+  }
+  TRUE
+}
+
+conv_level <- df_filtered %>%
+  group_by(conv_id) %>%
+  summarise(
+    has_custom_instructions = any(to_flag(has_custom_instructions), na.rm = TRUE),
+    custom_gpt_used = any(to_flag(custom_gpt_used), na.rm = TRUE),
+    has_reasoning = any(to_flag(has_reasoning), na.rm = TRUE),
+    has_tools = any(map_lgl(tools_used, has_tools_flag), na.rm = TRUE),
+    model_family = first(model_family),
+    .groups = "drop"
+  )
+
+turn_stats_filtered <- df_filtered %>%
+  group_by(conv_id) %>%
+  summarise(n_turns = n(), .groups = "drop")
+
+convs_total <- n_distinct(df_clean$conv_id)
+convs_lt2 <- conv_stats %>% filter(n_turns < 2) %>% nrow()
+convs_gt95 <- conv_stats %>% filter(n_turns > len_95) %>% nrow()
+convs_retained <- length(valid_conv_ids)
+turns_total <- n_distinct(turn_stats$abs_turn)
+turns_retained <- length(valid_turns)
+turns_dropped <- turns_total - turns_retained
+
+fmt_n <- function(x) {
+  if (is.na(x)) return("NA")
+  format(x, big.mark = ",", scientific = FALSE, trim = TRUE)
+}
+
+fmt_pct <- function(x) {
+  if (is.na(x)) return("NA")
+  sprintf("%.1f%%", 100 * x)
+}
+
+summary_stats <- tibble(
+  metric = c(
+    "Raw conversations (retrieved)",
+    "Merged rows (raw)",
+    "Merged conversations (raw)",
+    "Filtered rows",
+    "Filtered conversations",
+    "Convs excluded (<2 turns)",
+    "Convs excluded (>95th percentile length)",
+    "Convs retained after length filter",
+    "95th percentile length (turns)",
+    "Turn positions retained (>=200 convs)",
+    "Turn positions excluded (<200 convs)",
+    "Median turns per conversation (filtered)",
+    "Median tokens per turn (filtered)",
+    "Custom instructions (% convs, filtered)",
+    "Custom GPT used (% convs, filtered)",
+    "Reasoning present (% convs, filtered)",
+    "Tools used (% convs, filtered)",
+    "Model family = gpt-4 (% convs, filtered)",
+    "Model family = gpt-5 (% convs, filtered)",
+    "Model family = o (% convs, filtered)",
+    "Model family = other (% convs, filtered)"
+  ),
+  value = c(
+    fmt_n(raw_conv_count),
+    fmt_n(nrow(df)),
+    fmt_n(n_distinct(df$conv_id)),
+    fmt_n(nrow(df_filtered)),
+    fmt_n(n_distinct(df_filtered$conv_id)),
+    fmt_n(convs_lt2),
+    fmt_n(convs_gt95),
+    fmt_n(convs_retained),
+    fmt_n(len_95),
+    fmt_n(turns_retained),
+    fmt_n(turns_dropped),
+    fmt_n(median(turn_stats_filtered$n_turns, na.rm = TRUE)),
+    fmt_n(median(df_filtered$n_tokens_total, na.rm = TRUE)),
+    fmt_pct(mean(conv_level$has_custom_instructions, na.rm = TRUE)),
+    fmt_pct(mean(conv_level$custom_gpt_used, na.rm = TRUE)),
+    fmt_pct(mean(conv_level$has_reasoning, na.rm = TRUE)),
+    fmt_pct(mean(conv_level$has_tools, na.rm = TRUE)),
+    fmt_pct(mean(conv_level$model_family == "gpt-4", na.rm = TRUE)),
+    fmt_pct(mean(conv_level$model_family == "gpt-5", na.rm = TRUE)),
+    fmt_pct(mean(conv_level$model_family == "o", na.rm = TRUE)),
+    fmt_pct(mean(conv_level$model_family == "other", na.rm = TRUE))
+  )
+)
+
+knitr::kable(summary_stats, col.names = c("Metric", "Value"))
+```
+
+```{r}
+direction_stats <- df_filtered %>%
+  count(direction) %>%
+  mutate(
+    pct = n / sum(n),
+    n = fmt_n(n),
+    pct = fmt_pct(pct)
+  ) %>%
+  rename(Direction = direction, `Rows` = n, `Percent` = pct)
+
+knitr::kable(direction_stats)
+```
+
+```{r}
+topic_summary <- df_filtered %>%
+  count(topic_label, sort = TRUE) %>%
+  mutate(
+    pct = n / sum(n),
+    n = fmt_n(n),
+    pct = fmt_pct(pct)
+  ) %>%
+  rename(`Topic` = topic_label, `Rows` = n, `Percent` = pct) %>%
+  head(10)
+
+knitr::kable(topic_summary)
 ```
 
 ## 2) Topic labels
@@ -108,6 +269,35 @@ df_long <- df_long %>%
   group_by(metric) %>%
   mutate(z = as.numeric(scale(value))) %>%
   ungroup()
+
+if (!"model_family" %in% names(df_long)) {
+  df_long <- df_long %>%
+    mutate(
+      model_family = case_when(
+        is.na(model_slug) ~ "other",
+        str_detect(model_slug, "^gpt-4") ~ "gpt-4",
+        str_detect(model_slug, "^gpt-5") ~ "gpt-5",
+        str_detect(model_slug, "^o") ~ "o",
+        TRUE ~ "other"
+      ),
+      model_family = factor(model_family, levels = c("gpt-4", "gpt-5", "o", "other"))
+    )
+}
+
+metric_diag <- df_long %>%
+  group_by(metric) %>%
+  summarise(
+    n = n(),
+    sd_z = sd(z, na.rm = TRUE),
+    range_z = diff(range(z, na.rm = TRUE)),
+    n_unique = n_distinct(z),
+    cor_turn = cor(abs_turn, z, use = "complete.obs"),
+    .groups = "drop"
+  ) %>%
+  mutate(metric_label = metric_labels[metric]) %>%
+  relocate(metric_label, .after = metric)
+
+metric_diag
 ```
 
 ## 4) Model specification
@@ -190,7 +380,8 @@ for (m in unique(df_long$metric)) {
 ### 6.1 Direction effects (parametric terms)
 
 ```{r fig.height=6, fig.width=10}
-param <- read_csv(file.path(outputs_dir, "gamm_summary.csv"), show_col_types = FALSE)
+param <- read_csv(file.path(outputs_dir, "gamm_summary.csv"), show_col_types = FALSE) %>%
+  mutate(metric_label = metric_labels[metric])
 
 if (!"estimate" %in% names(param) && "Estimate" %in% names(param)) {
   param <- param %>%
@@ -211,7 +402,7 @@ dir_effects <- param %>%
     term = paste0("direction", term)
   )
 
-p_dir_effects <- ggplot(dir_effects, aes(x = estimate, y = term, color = metric)) +
+p_dir_effects <- ggplot(dir_effects, aes(x = estimate, y = term, color = metric_label)) +
   geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
   geom_point() +
   geom_errorbarh(
@@ -219,7 +410,7 @@ p_dir_effects <- ggplot(dir_effects, aes(x = estimate, y = term, color = metric)
         xmax = estimate + 1.96 * std_error),
     height = 0.2
   ) +
-  facet_wrap(~metric, scales = "free_y") +
+  facet_wrap(~metric_label, scales = "free_y") +
   labs(
     title = "Direction effects across metrics",
     x = "Estimate (z)",
@@ -263,20 +454,20 @@ p_dir_dispersion <- ggplot() +
   geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
   geom_point(
     data = dir_inter,
-    aes(x = estimate, y = metric, color = direction),
+    aes(x = estimate, y = metric_label, color = direction),
     alpha = 0.25,
     size = 1.5,
     position = position_jitter(height = 0.1, width = 0)
   ) +
   geom_errorbarh(
     data = dir_main,
-    aes(xmin = estimate - 1.96 * std_error, xmax = estimate + 1.96 * std_error, y = metric, color = direction),
+    aes(xmin = estimate - 1.96 * std_error, xmax = estimate + 1.96 * std_error, y = metric_label, color = direction),
     height = 0.15,
     size = 0.6
   ) +
   geom_point(
     data = dir_main,
-    aes(x = estimate, y = metric, color = direction),
+    aes(x = estimate, y = metric_label, color = direction),
     size = 2.5
   ) +
   labs(
@@ -295,7 +486,7 @@ ggsave(file.path(fig_dir, "direction_effects_with_dispersion.png"), p_dir_disper
 ### 6.1c Direction marginal means (model-based)
 
 This version shows both directions by plotting model-based marginal means,
-averaged across topics at a representative turn position.
+averaged across the observed topic/turn distribution within each model family.
 
 ```{r fig.height=6, fig.width=9}
 model_files <- list.files(models_dir, pattern = "^gamm_.*\\.rds$", full.names = TRUE)
@@ -306,43 +497,48 @@ for (path in model_files) {
   metric <- sub("^gamm_(.*)\\.rds$", "\\1", basename(path))
   fit <- readRDS(path)
 
-  model_data <- fit$model
-  topic_levels <- levels(model_data$topic_label)
-  direction_levels <- levels(model_data$direction)
-
-  grid <- expand.grid(
-    topic_label = topic_levels,
-    direction = direction_levels,
-    stringsAsFactors = FALSE
-  )
-  grid$abs_turn <- median(model_data$abs_turn, na.rm = TRUE)
-  grid$conv_id <- model_data$conv_id[1]
+  d <- df_long %>% filter(metric == !!metric)
 
   pred <- predict(
     fit,
-    newdata = grid,
+    newdata = d,
     se.fit = TRUE,
     type = "link",
     exclude = "s(conv_id)"
   )
 
-  grid$estimate <- as.numeric(pred$fit)
-  grid$std_error <- as.numeric(pred$se.fit)
-  grid$metric <- metric
+  d$estimate <- as.numeric(pred$fit)
+  d$std_error <- as.numeric(pred$se.fit)
 
-  dir_pred_list[[metric]] <- grid
+  dir_pred_list[[metric]] <- d
 }
 
 dir_pred <- bind_rows(dir_pred_list) %>%
-  mutate(direction = gsub("\\u2192", "->", as.character(direction))) %>%
-  group_by(metric, direction) %>%
+  mutate(
+    direction = gsub("\\u2192", "->", as.character(direction)),
+    metric_label = metric_labels[metric]
+  ) %>%
+  group_by(metric, metric_label, model_family, direction) %>%
   summarise(
     estimate = mean(estimate, na.rm = TRUE),
     std_error = sqrt(mean(std_error^2, na.rm = TRUE)),
     .groups = "drop"
   )
 
-p_dir_means <- ggplot(dir_pred, aes(x = estimate, y = metric, color = direction)) +
+model_family_labels <- df_clean %>%
+  filter(!is.na(model_slug)) %>%
+  distinct(model_family, model_slug) %>%
+  group_by(model_family) %>%
+  summarise(
+    label = paste(sort(unique(model_slug)), collapse = ", "),
+    .groups = "drop"
+  ) %>%
+  mutate(label = paste0(as.character(model_family), " (", label, ")")) %>%
+  mutate(label = stringr::str_wrap(label, width = 45))
+
+model_family_labels <- setNames(model_family_labels$label, model_family_labels$model_family)
+
+p_dir_means <- ggplot(dir_pred, aes(x = estimate, y = metric_label, color = direction)) +
   geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
   geom_point(size = 2.5, position = position_dodge(width = 0.3)) +
   geom_errorbarh(
@@ -350,13 +546,15 @@ p_dir_means <- ggplot(dir_pred, aes(x = estimate, y = metric, color = direction)
     height = 0.2,
     position = position_dodge(width = 0.3)
   ) +
+  facet_wrap(~ model_family, labeller = as_labeller(model_family_labels)) +
   labs(
     title = "Direction marginal means (model-based)",
     x = "Estimated alignment (z)",
     y = NULL,
     color = "Direction"
   ) +
-  theme_minimal()
+  theme_minimal() +
+  theme(strip.text = element_text(size = 9))
 
 p_dir_means
 ggsave(file.path(fig_dir, "direction_marginal_means.png"), p_dir_means,
@@ -428,14 +626,17 @@ for (path in model_files) {
 }
 
 dir_diff <- bind_rows(diff_list) %>%
-  mutate(direction_contrast = gsub("\\u2192", "->", as.character(direction_contrast)))
+  mutate(
+    direction_contrast = gsub("\\u2192", "->", as.character(direction_contrast)),
+    metric_label = metric_labels[metric]
+  )
 
 p_dir_diff <- ggplot(dir_diff, aes(x = abs_turn, y = estimate)) +
   geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
   geom_ribbon(aes(ymin = estimate - 1.96 * std_error, ymax = estimate + 1.96 * std_error),
               alpha = 0.2) +
   geom_line() +
-  facet_wrap(~ metric, scales = "free_y") +
+  facet_wrap(~ metric_label, scales = "free_y") +
   labs(
     title = "Direction difference over turns (model-based)",
     subtitle = "User→assistant minus assistant→user",
@@ -591,18 +792,28 @@ for (path in model_files) {
   smooth_list[[metric]] <- smooth_df
 }
 
-smooth_all <- bind_rows(smooth_list)
+smooth_all <- bind_rows(smooth_list) %>%
+  mutate(metric_label = metric_labels[metric])
+
+p_smooth_x_limits <- range(smooth_all$abs_turn, na.rm = TRUE)
 
 p_smooth_all <- ggplot(smooth_all, aes(x = abs_turn, y = estimate)) +
   geom_ribbon(aes(ymin = lower_ci, ymax = upper_ci), alpha = 0.2) +
   geom_line() +
-  facet_wrap(~ metric) +
+  ggh4x::facet_wrap2(~ metric_label, scales = "fixed", axes = "all") +
+  scale_x_continuous(limits = p_smooth_x_limits) +
   labs(
     title = "Turn-position dynamics across metrics",
-    x = "Absolute turn index",
+    x = "Turn",
     y = "Smooth contribution (z)"
   ) +
-  theme_minimal()
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    strip.text = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 11),
+    axis.title = element_text(size = 12)
+  )
 
 p_smooth_all
 ggsave(file.path(fig_dir, "turn_dynamics_all_metrics.png"), p_smooth_all,
@@ -664,26 +875,106 @@ for (path in model_files) {
 }
 
 traj_df <- bind_rows(trajectory_list) %>%
-  mutate(direction = gsub("\\u2192", "->", as.character(direction)))
+  mutate(
+    direction = gsub("\\u2192", "->", as.character(direction)),
+    metric_label = metric_labels[metric]
+  )
 
-p_topic_traj <- ggplot(traj_df, aes(x = abs_turn, y = estimate, color = topic_label, fill = topic_label)) +
+cluster_source_path <- "../../data/outputs/bayes/bayes_topic_alignment_outputs/tables/topic_cluster_assignments.csv"
+cluster_colors_path <- "../../data/outputs/bayes/bayes_topic_alignment_outputs/tables/topic_cluster_colors.csv"
+cluster_colors <- NULL
+
+cluster_df <- NULL
+if (file.exists(cluster_source_path)) {
+  cluster_df <- read_csv(cluster_source_path, show_col_types = FALSE) %>%
+    select(topic_label, topic_cluster) %>%
+    distinct() %>%
+    mutate(topic_cluster = factor(topic_cluster))
+  if (file.exists(cluster_colors_path)) {
+    cluster_colors_df <- read_csv(cluster_colors_path, show_col_types = FALSE)
+    cluster_colors <- setNames(cluster_colors_df$color, cluster_colors_df$topic_cluster)
+  }
+}
+
+if (is.null(cluster_df)) {
+  cluster_df <- tibble(
+    topic_label = unique(traj_df$topic_label),
+    topic_cluster = factor("Unclustered")
+  )
+  cluster_colors <- c(Unclustered = "gray60")
+} else if (is.null(cluster_colors)) {
+  cluster_colors <- setNames(
+    c("#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e")[seq_along(unique(cluster_df$topic_cluster))],
+    sort(unique(cluster_df$topic_cluster))
+  )
+}
+
+traj_df <- traj_df %>%
+  left_join(cluster_df, by = "topic_label") %>%
+  mutate(topic_cluster = forcats::fct_explicit_na(topic_cluster, "Unclustered"))
+
+traj_df <- traj_df %>%
+  left_join(topic_counts %>% select(topic_label, n_convs), by = "topic_label")
+
+cluster_summary <- traj_df %>%
+  group_by(metric_label, direction, abs_turn, topic_cluster) %>%
+  summarise(
+    weight_sum = sum(n_convs, na.rm = TRUE),
+    estimate = weighted.mean(estimate, w = n_convs, na.rm = TRUE),
+    std_error = sqrt(sum((n_convs^2) * (std_error^2), na.rm = TRUE)) / weight_sum,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    lower = estimate - 1.96 * std_error,
+    upper = estimate + 1.96 * std_error
+  )
+
+cluster_label_map <- cluster_df %>%
+  distinct(topic_label, topic_cluster) %>%
+  group_by(topic_cluster) %>%
+  summarise(
+    label = paste(topic_label, collapse = ", "),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    label = if_else(
+      as.character(topic_cluster) == "Unclustered",
+      paste0("Unclustered: ", label),
+      paste0("Cluster ", topic_cluster, ": ", label)
+    ),
+    label = stringr::str_wrap(label, width = 60)
+  )
+cluster_labels <- setNames(cluster_label_map$label, cluster_label_map$topic_cluster)
+
+p_topic_traj <- ggplot(cluster_summary, aes(x = abs_turn, y = estimate, color = topic_cluster, fill = topic_cluster)) +
   geom_hline(yintercept = 0, linetype = "dashed", color = "gray60", linewidth = 0.4) +
-  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.15, color = NA) +
-  geom_line(alpha = 0.9) +
-  facet_grid(direction ~ metric, scales = "free_y") +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, linewidth = 0) +
+  geom_line(linewidth = 0.9) +
+  facet_grid(direction ~ metric_label, scales = "fixed") +
+  scale_y_continuous(
+    limits = range(c(cluster_summary$lower, cluster_summary$upper), na.rm = TRUE)
+  ) +
   labs(
-    title = "Topic trajectories over turns (model-based)",
-    x = "Absolute turn index",
+    title = "Topic cluster trajectories over turns (model-based, weighted)",
+    x = "Turn",
     y = "Estimated alignment (z)",
-    color = "Topic"
+    color = "Topic cluster",
+    fill = "Topic cluster"
   ) +
   coord_cartesian(clip = "off") +
-  theme_minimal() +
+  scale_color_manual(values = cluster_colors, labels = cluster_labels, drop = FALSE) +
+  scale_fill_manual(values = cluster_colors, labels = cluster_labels, drop = FALSE) +
+  guides(color = guide_legend(ncol = 4), fill = guide_legend(ncol = 4)) +
+  theme_minimal(base_size = 13) +
   theme(
     legend.position = "bottom",
+    legend.text = element_text(size = 9),
+    plot.title = element_text(size = 15, face = "bold"),
+    strip.text = element_text(size = 11, face = "bold"),
+    axis.text = element_text(size = 10),
+    axis.title = element_text(size = 12),
     plot.margin = margin(5.5, 5.5, 5.5, 20)
-  ) +
-  guides(fill = "none")
+  )
 
 p_topic_traj
 ggsave(file.path(fig_dir, "topic_trajectories_over_turns.png"), p_topic_traj,
