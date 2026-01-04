@@ -3,7 +3,7 @@
 Research project investigating how ChatGPT is used in practice through shared conversation analysis.
 
 **Figure 1** Overview of Alignment Under Use pipeline
-![image](data\img\figure_1.png)
+![image](data/img/figure_1.png)
 
 
 ## Overview
@@ -172,7 +172,7 @@ The cleaning script applies minimal destructive text normalization:
 --skip-markdown-cleaning     # Skip markdown cleaning
 ```
 **Figure 2** Overview of data collection and cleaning
-![image](data\img\figure_2.png)
+![image](data/img/figure_2.png)
 
 ### Alignment Analysis
 
