@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="data/img/icon.png" alt="Alignment Under Use Logo" width="200"/>
+  <img src="https://raw.githubusercontent.com/sabszh/AlignmentUnderUse/main/data/img/icon.png" alt="Alignment Under Use Logo" width="200"/>
 </div>
 
 # Alignment Under Use
@@ -7,7 +7,8 @@
 Research project investigating how ChatGPT is used in practice through shared conversation analysis.
 
 **Figure 1** Overview of Alignment Under Use pipeline
-![image](data/img/figure_1.png)
+
+![Alignment Under Use Pipeline](https://raw.githubusercontent.com/sabszh/AlignmentUnderUse/main/data/img/figure_1.png)
 
 ## Table of Contents
 
@@ -214,8 +215,10 @@ The cleaning script applies minimal destructive text normalization:
 --skip-language-filter       # Skip language detection
 --skip-markdown-cleaning     # Skip markdown cleaning
 ```
+
 **Figure 2** Overview of data collection and cleaning
-![image](data/img/figure_2.png)
+
+![Data Collection and Cleaning](https://raw.githubusercontent.com/sabszh/AlignmentUnderUse/main/data/img/figure_2.png)
 
 ### Alignment Analysis
 
