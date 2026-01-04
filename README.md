@@ -1,9 +1,52 @@
+<div align="center">
+  <img src="data/img/icon.png" alt="Alignment Under Use Logo" width="200"/>
+</div>
+
 # Alignment Under Use
 
 Research project investigating how ChatGPT is used in practice through shared conversation analysis.
 
 **Figure 1** Overview of Alignment Under Use pipeline
 ![image](data/img/figure_1.png)
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Data Sources & APIs](#data-sources--apis)
+  - [Arctic Shift Reddit Archive](#arctic-shift-reddit-archive)
+  - [ChatGPT Backend API](#chatgpt-backend-api)
+- [Technical Requirements](#technical-requirements)
+  - [Dependencies](#dependencies)
+  - [Installation](#installation)
+  - [Authentication](#authentication)
+- [Usage](#usage)
+  - [Pipeline Execution](#pipeline-execution)
+  - [Data Cleaning](#data-cleaning)
+  - [Alignment Analysis](#alignment-analysis)
+  - [End-to-End Analysis Script](#end-to-end-analysis-script)
+  - [Command-Line Options](#command-line-options)
+- [Output Schema](#output-schema)
+  - [reddit_posts.jsonl](#reddit_postsjsonl)
+  - [reddit_comments.jsonl](#reddit_commentsjsonl)
+  - [conversations.jsonl](#conversationsjsonl)
+- [Data Folder Structure](#data-folder-structure)
+- [Topic Modeling (Three Models)](#topic-modeling-three-models)
+- [Linguistic Style Matching (LSM)](#linguistic-style-matching-lsm)
+- [Lexical + Syntactic Alignment (LexSyn)](#lexical--syntactic-alignment-lexsyn)
+- [Combined Analysis](#combined-analysis)
+- [Reproducibility](#reproducibility)
+  - [Data Provenance](#data-provenance)
+  - [Replication Steps](#replication-steps)
+  - [Rate Limiting](#rate-limiting)
+  - [Known Limitations](#known-limitations)
+- [Project Structure](#project-structure)
+- [Data Availability & Ethics](#data-availability--ethics)
+  - [Analysis Pipeline](#analysis-pipeline)
+  - [Data Release Policy](#data-release-policy)
+  - [What Is Shared](#what-is-shared)
+  - [Replication](#replication)
+  - [Ethical Responsibility](#ethical-responsibility)
+- [License](#license)
 
 
 ## Overview
@@ -702,3 +745,78 @@ This program is free software: you can redistribute it and/or modify it under th
 This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+## Citation
+
+If you use this project in your research, please cite it as follows:
+
+```bibtex
+@software{alignment_under_use,
+  title = {Alignment Under Use: Analyzing ChatGPT Usage Patterns Through Shared Conversations},
+  author = {Your Name},
+  year = {2025},
+  url = {https://github.com/yourusername/AlignmentUnderUse},
+  note = {Open-source research pipeline}
+}
+```
+
+## Contributing
+
+Contributions are welcome! Please feel free to:
+- Report bugs via GitHub Issues
+- Submit feature requests
+- Create pull requests with improvements
+- Suggest enhancements to documentation
+
+For substantial changes, please open an issue first to discuss proposed modifications.
+
+## Support & Troubleshooting
+
+### Common Issues
+
+**Issue: HTTP 403 errors when fetching conversations**
+- **Solution:** Your ChatGPT cookie has expired. Re-extract it from your browser following the [Authentication](#authentication) section.
+
+**Issue: ImportError for required packages**
+- **Solution:** Ensure all dependencies are installed: `pip install -r requirements.txt`
+
+**Issue: CUDA memory errors during embedding computation**
+- **Solution:** Reduce batch size with `--batch-size 64` or use CPU with `--device cpu`
+
+**Issue: Arctic Shift API timeouts**
+- **Solution:** Increase delays between requests: `--comments-delay 2.0`
+
+### Getting Help
+
+1. Check the [Known Limitations](#known-limitations) section
+2. Review the [Command-Line Options](#command-line-options) for detailed parameter documentation
+3. Open an issue on GitHub with:
+   - Command used and any error messages
+   - Python version and OS
+   - Relevant output from running the command
+
+## Additional Resources
+
+- **Papers & Research:** [Link to published findings if available]
+- **Data Documentation:** See [data/README.md](data/README.md) for detailed data format specifications
+- **Related Work:** [Links to related alignment/discourse analysis projects]
+
+## Acknowledgments
+
+- **Arctic Shift** - Historical Reddit data archive
+- **OpenAI** - ChatGPT conversation sharing feature and backend API
+- **Hugging Face** - Pre-trained models (sentence-transformers, transformers)
+- **Research Community** - Feedback and contributions
+
+---
+
+<div align="center">
+  <p>
+    <strong>Made with ❤️ for research and understanding AI-human interaction</strong>
+  </p>
+  <p>
+    <a href="LICENSE">License</a> •
+    <a href="https://github.com">GitHub</a> •
+    <a href="https://github.com/issues">Report Issue</a>
+  </p>
+</div>
